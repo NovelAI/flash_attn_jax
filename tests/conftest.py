@@ -6,6 +6,9 @@ import threading
 import jax
 
 jax.config.update("jax_default_matmul_precision", "highest")
+# jax.config.update("jax_compilation_cache_dir", "/tmp/xla_cache")
+# jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
+# jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
 
 def maybe_debugpy_postmortem(excinfo):
     """Make the debugpy debugger enter and stop at a raised exception.

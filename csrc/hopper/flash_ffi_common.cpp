@@ -3,6 +3,7 @@
  ******************************************************************************/
 
 #include <stddef.h>
+#include <vector>
 #include <cute/layout.hpp>
 #include <cuda_runtime_api.h>
 #include <cmath>
@@ -55,42 +56,60 @@ ffi::Error set_params_fprop_ffi(Flash_fwd_params &params,
     params.k_ptr = k.untyped_data();
     params.v_ptr = v.untyped_data();
 
-    if (q.dimensions().size() != 4 || k.dimensions().size() != 4 ||
-        v.dimensions().size() != 4 || out.dimensions().size() != 4) {
-      return ffi::Error(ffi::ErrorCode::kInvalidArgument,
-                        "All input and output buffers must be rank 4 tensors");
-    }
-    auto q_shape = cute::make_shape(q.dimensions()[0], q.dimensions()[1],
-                                   q.dimensions()[2], q.dimensions()[3]);
-    auto q_strides = cute::compact_row_major(q_shape);
-    auto k_shape = cute::make_shape(k.dimensions()[0], k.dimensions()[1],
-                                   k.dimensions()[2], k.dimensions()[3]);
-    auto k_strides = cute::compact_row_major(k_shape);
-    auto v_shape = cute::make_shape(v.dimensions()[0], v.dimensions()[1],
-                                   v.dimensions()[2], v.dimensions()[3]);
-    auto v_strides = cute::compact_row_major(v_shape);
-    auto out_shape = cute::make_shape(out.dimensions()[0], out.dimensions()[1],
-                                     out.dimensions()[2], out.dimensions()[3]);
-    auto out_strides = cute::compact_row_major(out_shape);
-    // All stride are in elements, not bytes.
-    params.q_row_stride = cute::get<1>(q_strides);
-    params.k_row_stride = cute::get<1>(k_strides);
-    params.v_row_stride = cute::get<1>(v_strides);
-    params.q_head_stride = cute::get<2>(q_strides);
-    params.k_head_stride = cute::get<2>(k_strides);
-    params.v_head_stride = cute::get<2>(v_strides);
-    params.v_dim_stride = cute::get<3>(v_strides);
-    params.o_ptr = out.untyped_data();
-    params.o_row_stride = cute::get<1>(out_strides);
-    params.o_head_stride = cute::get<2>(out_strides);
+    // Helper to compute row-major strides for a buffer
+    // Returns strides in elements (not bytes) as a vector
+    auto compute_strides = [](const ffi::AnyBuffer& buf) -> std::vector<int64_t> {
+        int ndim = buf.dimensions().size();
+        std::vector<int64_t> strides(ndim);
+        int64_t s = 1;
+        for (int i = ndim - 1; i >= 0; --i) {
+            strides[i] = s;
+            s *= buf.dimensions()[i];
+        }
+        return strides;
+    };
 
-    if (cu_seqlens_q_d == nullptr) {
-        params.q_batch_stride = cute::get<0>(q_strides);
-        params.o_batch_stride = cute::get<0>(out_strides);
+    // Support both 3D (varlen) and 4D (non-varlen) tensors
+    // For 3D: shape is [total, heads, dim]
+    // For 4D: shape is [batch, seq, heads, dim]
+    // Use negative indexing like PyTorch: -3 = row, -2 = head, -1 = dim
+    int q_ndim = q.dimensions().size();
+    int k_ndim = k.dimensions().size();
+    int v_ndim = v.dimensions().size();
+    int out_ndim = out.dimensions().size();
+
+    if ((q_ndim != 3 && q_ndim != 4) || (k_ndim != 3 && k_ndim != 4) ||
+        (v_ndim != 3 && v_ndim != 4) || (out_ndim != 3 && out_ndim != 4)) {
+      return ffi::Error(ffi::ErrorCode::kInvalidArgument,
+                        "All input and output buffers must be rank 3 or 4 tensors");
     }
-    if (cu_seqlens_k_d == nullptr) {
-        params.k_batch_stride = cute::get<0>(k_strides);
-        params.v_batch_stride = cute::get<0>(v_strides);
+
+    auto q_strides = compute_strides(q);
+    auto k_strides = compute_strides(k);
+    auto v_strides = compute_strides(v);
+    auto out_strides = compute_strides(out);
+
+    // All strides are in elements, not bytes.
+    // Use negative indexing: -3 = row (seq), -2 = head, -1 = dim
+    params.q_row_stride = q_strides[q_ndim - 3];
+    params.k_row_stride = k_strides[k_ndim - 3];
+    params.v_row_stride = v_strides[v_ndim - 3];
+    params.q_head_stride = q_strides[q_ndim - 2];
+    params.k_head_stride = k_strides[k_ndim - 2];
+    params.v_head_stride = v_strides[v_ndim - 2];
+    params.v_dim_stride = v_strides[v_ndim - 1];
+    params.o_ptr = out.untyped_data();
+    params.o_row_stride = out_strides[out_ndim - 3];
+    params.o_head_stride = out_strides[out_ndim - 2];
+
+    // Batch strides only make sense for non-varlen (4D) tensors
+    if (cu_seqlens_q_d == nullptr && q_ndim == 4) {
+        params.q_batch_stride = q_strides[0];
+        params.o_batch_stride = out_strides[0];
+    }
+    if (cu_seqlens_k_d == nullptr && k_ndim == 4) {
+        params.k_batch_stride = k_strides[0];
+        params.v_batch_stride = v_strides[0];
     }
 
     params.cu_seqlens_q = static_cast<int *>(cu_seqlens_q_d);
@@ -156,4 +175,6 @@ ffi::Error set_params_fprop_ffi(Flash_fwd_params &params,
     #ifdef FLASHATTENTION_DISABLE_LOCAL
         TORCH_CHECK(!params.is_local, "This flash attention build does not support local attention.");
     #endif
+
+    return ffi::Error();  // Success
 }

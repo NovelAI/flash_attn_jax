@@ -570,7 +570,7 @@ mha_fwd_ffi_impl(
     }
 
     Flash_fwd_params params;
-    set_params_fprop_ffi(params, stream, device_ordinal,
+    FFI_RET_CHECK(set_params_fprop_ffi(params, stream, device_ordinal,
                      batch_size,
                      seqlen_q, seqlen_k,
                      seqlen_q_rounded, seqlen_k_rounded,
@@ -588,7 +588,7 @@ mha_fwd_ffi_impl(
                      window_size_right,
                      attention_chunk,
                      softcap,
-                     sm_margin);
+                     sm_margin));
     params.total_q = total_q;
     params.total_k = total_k;
     params.b_k = batch_size_k;
@@ -664,6 +664,7 @@ mha_fwd_ffi_impl(
     bool const scheduler_needs_semaphore = params.arch >= 90
         ? (((params.is_causal || params.is_local) && (params.num_splits == 1)) || is_varlen)
         : ((params.is_causal && !is_varlen) || (is_varlen && params.num_splits > 1));
+    std::cerr << "[DEBUG] scheduler_needs_semaphore=" << scheduler_needs_semaphore << ", is_varlen=" << is_varlen << ", is_causal=" << params.is_causal << ", is_local=" << params.is_local << ", num_splits=" << params.num_splits << "\n";
     params.varlen_sort_batches = !params.is_local; // Use this value for Sort in scheduler template
     params.head_swizzle = params.is_causal || params.is_local; // Use this value for LPT in scheduler template
     if (scheduler_needs_semaphore || use_prepare_varlen) {

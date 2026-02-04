@@ -77,13 +77,14 @@ def ref_mha_varlen(q, k, v, seqlens_q, seqlens_k, *, is_causal=False, window_siz
     out = jnp.einsum('hqk,khd->qhd', attn, v.astype(jnp.float32))
     return out.astype(q.dtype)
 
+@pytest.mark.parametrize("backend", ["fa2", "fa3"])
 @pytest.mark.parametrize("dtype", [jnp.float16, jnp.bfloat16])
 @pytest.mark.parametrize("local", ['local',''])
 @pytest.mark.parametrize("causal", ['causal',''])
 @pytest.mark.parametrize("d", [59, 32])
 @pytest.mark.parametrize("h", [1, 4])
 @pytest.mark.parametrize("m", [1, 2]) # for MQA/GQA
-def test_varlen_flash_fwd(m, h, d, causal, local, dtype):
+def test_varlen_flash_fwd(m, h, d, causal, local, dtype, backend):
     window_size = (3,3) if local else (-1,-1)
     lens = [1, 2, 0, 6, 10]
     b = len(lens)
@@ -109,7 +110,7 @@ def test_varlen_flash_fwd(m, h, d, causal, local, dtype):
 
     out = flash_mha_varlen(q,k,v, seqlens_q = fenceposts, seqlens_k = fenceposts,
                            max_seqlen_q=max(lens), max_seqlen_k=max(lens),
-                            is_causal=bool(causal), window_size=window_size)
+                            is_causal=bool(causal), window_size=window_size, backend=backend)
     check(ref_out, jax_out, out)
     
 
@@ -119,7 +120,8 @@ def test_varlen_flash_fwd(m, h, d, causal, local, dtype):
 @pytest.mark.parametrize("d", [59, 32])
 @pytest.mark.parametrize("h", [1, 4])
 @pytest.mark.parametrize("m", [1, 2]) # for MQA/GQA
-def test_varlen_flash_bwd(m, h, d, causal, local, dtype):
+@pytest.mark.parametrize("backend", ["fa2", "fa3"])
+def test_varlen_flash_bwd(m, h, d, causal, local, dtype, backend):
     window_size = (3,3) if local else (-1,-1)
     lens = [1, 2, 0, 6, 10]
     b = len(lens)
@@ -140,7 +142,7 @@ def test_varlen_flash_bwd(m, h, d, causal, local, dtype):
         q,k,v = tree_map(lambda x: x.astype(dtype), qkv)
         o = flash_mha_varlen(q, k, v, seqlens_q = fenceposts, seqlens_k = fenceposts,
                             max_seqlen_q=max(lens), max_seqlen_k=max(lens),
-                            is_causal=bool(causal), window_size=window_size)
+                            is_causal=bool(causal), window_size=window_size, backend=backend)
         return o.sum() * (1.0 / math.sqrt(total_seqlen * h * d * m))
 
     ref_grad = jax.grad(ref)((q,k,v), dtype=jnp.float32)
@@ -163,7 +165,8 @@ def vmap_unrolled(f):
 @pytest.mark.parametrize("d", [59, 32])
 @pytest.mark.parametrize("h", [1, 4])
 @pytest.mark.parametrize("m", [1, 2]) # for MQA/GQA
-def test_varlen_flash_vmap(m, h, d, causal, local, dtype):
+@pytest.mark.parametrize("backend", ["fa2", "fa3"])
+def test_varlen_flash_vmap(m, h, d, causal, local, dtype, backend):
     window_size = (3,3) if local else (-1,-1)
     lens = [1, 2, 0, 6, 10]
     b = len(lens)
@@ -177,7 +180,7 @@ def test_varlen_flash_vmap(m, h, d, causal, local, dtype):
     def fwd_fn(q,k,v,fenceposts):
         return flash_mha_varlen(q,k,v, seqlens_q = fenceposts, seqlens_k = fenceposts,
                            max_seqlen_q=max(lens), max_seqlen_k=max(lens),
-                            is_causal=bool(causal), window_size=window_size)
+                            is_causal=bool(causal), window_size=window_size, backend=backend)
     def ref_fn(q,k,v,fenceposts):
         return ref_mha_varlen(q,k,v, seqlens_q = fenceposts, seqlens_k = fenceposts,
                            max_seqlen_q=max(lens), max_seqlen_k=max(lens),
@@ -202,7 +205,8 @@ def test_varlen_flash_vmap(m, h, d, causal, local, dtype):
 @pytest.mark.parametrize("causal", ['causal',''])
 @pytest.mark.parametrize("d", [59, 32])
 @pytest.mark.parametrize("h", [1, 4])
-def test_varlen_flash_vmapk(h, d, causal, local, dtype):
+@pytest.mark.parametrize("backend", ["fa2", "fa3"])
+def test_varlen_flash_vmapk(h, d, causal, local, dtype, backend):
     window_size = (3,3) if local else (-1,-1)
     lens = [1, 2, 0, 6, 10]
     b = len(lens)
@@ -218,7 +222,7 @@ def test_varlen_flash_vmapk(h, d, causal, local, dtype):
     def fwd_fn(q, k, v, seqlens_q, seqlens_k):
         return flash_mha_varlen(q,k,v, seqlens_q = seqlens_q, seqlens_k = seqlens_k, 
                            max_seqlen_q=max(lens), max_seqlen_k=max(lens),
-                            is_causal=bool(causal), window_size=window_size)
+                            is_causal=bool(causal), window_size=window_size, backend=backend)
     @partial(jax.vmap, in_axes=(None,0,0,None,0))
     def ref_fn(q, k, v, seqlens_q, seqlens_k):
         return ref_mha_varlen(q,k,v, seqlens_q = seqlens_q, seqlens_k = seqlens_k, 

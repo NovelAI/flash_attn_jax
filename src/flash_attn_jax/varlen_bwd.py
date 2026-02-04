@@ -49,7 +49,8 @@ jax._src.dispatch.prim_requires_devices_during_lowering.add(_flash_mha_varlen_bw
 def flash_mha_varlen_bwd(dout, q, k, v, o, lse, seqlens_q, seqlens_k, *,
                          max_seqlen_q: int = -1, max_seqlen_k: int = -1,
                          softmax_scale: Optional[float] = None, is_causal: bool = False,
-                         window_size_left: int = -1, window_size_right: int = -1):
+                         window_size_left: int = -1, window_size_right: int = -1, backend: str = 'fa2'):
+    assert backend == 'fa2', "Only 'fa2' backend currently implemented for bwd."
     if max_seqlen_q  == -1:
         max_seqlen_q = q.shape[0]
     if max_seqlen_k == -1:

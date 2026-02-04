@@ -28,6 +28,7 @@ class FlashConfig:
     is_causal: bool
     window_size_left: int
     window_size_right: int
+    backend: str
 
 
 @jax.custom_vjp
@@ -45,7 +46,7 @@ _flash_mha_varlen_vjp.defvjp(_flash_mha_varlen_vjp_fwd, _flash_mha_varlen_vjp_bw
 def flash_mha_varlen(q, k, v, seqlens_q, seqlens_k=None, *,
                      max_seqlen_q: int = -1, max_seqlen_k: int = -1,
                      softmax_scale: Optional[float] = None, is_causal: bool = False,
-                     window_size: tuple = (-1, -1)):
+                     window_size: tuple = (-1, -1), backend: str = "fa2"):
     if seqlens_k is None:
         seqlens_k = seqlens_q
     config = FlashConfig(
@@ -55,5 +56,6 @@ def flash_mha_varlen(q, k, v, seqlens_q, seqlens_k=None, *,
         is_causal=is_causal,
         window_size_left=window_size[0],
         window_size_right=window_size[1],
+        backend=backend,
     )
     return _flash_mha_varlen_vjp(q, k, v, seqlens_q, seqlens_k, config)

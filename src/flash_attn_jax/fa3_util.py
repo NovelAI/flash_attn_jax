@@ -376,3 +376,58 @@ def calculate_scheduler_metadata_size(
     else:
         # No metadata needed (but we still allocate size 1 minimum)
         return 1
+
+
+def calculate_scheduler_metadata_size_varlen(
+    batch_size: int,
+    num_splits: int,
+    is_causal: bool,
+    is_local: bool,
+    arch: int = 90,
+) -> int:
+    """
+    Calculate scheduler_metadata buffer size for FA3 varlen case.
+
+    For varlen, use_prepare_varlen=True and is_varlen=True.
+    Based on logic from csrc/hopper/mha_fwd_ffi.cpp:664-676.
+
+    Args:
+        batch_size: Number of sequences in batch
+        num_splits: Number of splits being used
+        is_causal: Whether using causal masking
+        is_local: Whether using local/window attention
+        arch: GPU architecture (90 for Hopper, default)
+
+    Returns:
+        metadata_size: Size of int32 buffer needed
+    """
+    is_varlen = True
+
+    # Determine if scheduler needs semaphore (line 664-666)
+    if arch >= 90:
+        scheduler_needs_semaphore = ((is_causal or is_local) and (num_splits == 1)) or is_varlen
+    else:
+        scheduler_needs_semaphore = (is_causal and not is_varlen) or (is_varlen and num_splits > 1)
+
+    # Round batch size to multiple of 4 for alignment
+    b_rounded = ((batch_size + 3) // 4) * 4
+
+    # Calculate number of prepare batch vectors (line 671-673)
+    # For varlen, use_prepare_varlen=True, so we start with 2
+    num_prepare_batch_vectors = 2
+
+    # varlen_sort_batches = !is_local (line 667)
+    varlen_sort_batches = not is_local
+    if varlen_sort_batches:
+        num_prepare_batch_vectors += 1
+
+    # head_swizzle = is_causal || is_local (line 668)
+    head_swizzle = is_causal or is_local
+    if head_swizzle:
+        num_prepare_batch_vectors += 1
+
+    # Calculate final size (line 675-676)
+    tile_count_semaphore_offset = b_rounded * num_prepare_batch_vectors
+    metadata_size = int(scheduler_needs_semaphore) + tile_count_semaphore_offset
+
+    return metadata_size
