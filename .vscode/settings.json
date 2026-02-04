@@ -15,5 +15,21 @@
         "-DPython_ROOT_DIR=${workspaceFolder}/.venv",
         "-DNO_OPTIONS_FILE=1",
         "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
-    ]
+    ],
+    "[cpp]": {
+        "editor.tabSize": 2,
+        "editor.insertSpaces": true
+    },
+    "[cu]": {
+        "editor.tabSize": 2,
+        "editor.insertSpaces": true
+    },
+    "[c]": {
+        "editor.tabSize": 2,
+        "editor.insertSpaces": true
+    },
+    "[python]": {
+        "editor.tabSize": 4,
+        "editor.insertSpaces": true
+    }
 }

@@ -25,7 +25,7 @@ from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 
 from flash_attn_jax.ring_attention import ring_fwd
-from flash_attn_jax.util import num_splits_heuristic, round_multiple, array_mapping
+from flash_attn_jax.util import num_splits_heuristic, array_mapping
 
 # ==== Register primitives ====
 
@@ -37,10 +37,12 @@ jax._src.dispatch.prim_requires_devices_during_lowering.add(_flash_mha_fwd_p)
 # ==== Frontend ====
 
 def flash_mha_fwd(q, k, v, *,
-                  softmax_scale: Optional[float] = None, 
+                  softmax_scale: Optional[float] = None,
                   is_causal: bool = False,
                   window_size_left: int,
-                  window_size_right: int):
+                  window_size_right: int,
+                  backend: str = "fa2",
+                  softcap: float = 0.0):
     [nq, sq, hq, dq] = q.shape
     [nk, sk, hk, dk] = k.shape
     [nv, sv, hv, dv] = v.shape
@@ -51,18 +53,26 @@ def flash_mha_fwd(q, k, v, *,
     assert sk == sv
     assert q.dtype == k.dtype == v.dtype
     assert q.dtype in [jnp.bfloat16, jnp.float16]
-    
+    assert backend in ["fa2", "fa3"], f"backend must be 'fa2' or 'fa3', got '{backend}'"
+
     kwargs = dict(
         softmax_scale=softmax_scale,
         is_causal=is_causal,
         window_size_left=window_size_left,
         window_size_right=window_size_right,
+        backend=backend,
+        softcap=softcap,
     )
     return tuple(_flash_mha_fwd_p.bind(q, k, v, **kwargs))
 
 # ==== HLO lowering ====
 
-def _flash_mha_fwd_lowering(q, k, v, *, softmax_scale: float | None, is_causal: bool, window_size_left: int, window_size_right: int):
+def _flash_mha_fwd_lowering_fa2(q, k, v, *,
+                                softmax_scale: float | None,
+                                is_causal: bool,
+                                window_size_left: int,
+                                window_size_right: int):
+    """FA2 lowering - uses flash_mha_fwd FFI."""
     #         // This needs to match with run_mha_fwd_splitkv_dispatch
     # const int block_n = head_size <= 64 ? 256 : (head_size <= 128 ? 128 : 64);
     # const int num_n_blocks = (max_seqlen_k + block_n - 1) / block_n;
@@ -86,8 +96,9 @@ def _flash_mha_fwd_lowering(q, k, v, *, softmax_scale: float | None, is_causal: 
     num_m_blocks = max(1, (lq + 64 - 1) // 64)
     sm_count = 114 # H100
     num_splits = num_splits_heuristic(n * hq * num_m_blocks, sm_count, num_n_blocks, 128)
+    # Accumulator shapes match C++ layout: (num_splits, batch, num_heads, seqlen_q, head_dim)
     lseaccum_shape = (num_splits, n, hq, lq)
-    oaccum_shape = (num_splits, n, lq, hq, round_multiple(d, 32))
+    oaccum_shape = (num_splits, n, hq, lq, d)
 
     dpad = (8 - d%8) % 8
     if dpad > 0:
@@ -95,11 +106,11 @@ def _flash_mha_fwd_lowering(q, k, v, *, softmax_scale: float | None, is_causal: 
         q = jnp.pad(q, ((0,0),(0,0),(0,0),(0,dpad)), 'constant')
         k = jnp.pad(k, ((0,0),(0,0),(0,0),(0,dpad)), 'constant')
         v = jnp.pad(v, ((0,0),(0,0),(0,0),(0,dpad)), 'constant')
-    
+
     o_shape = [n, lq, hq, d+dpad]
     lse_shape = [n, hq, lq]
 
-    out_types = [jax.ShapeDtypeStruct(o_shape, dtype), 
+    out_types = [jax.ShapeDtypeStruct(o_shape, dtype),
                     jax.ShapeDtypeStruct(lse_shape, jnp.float32),
                     jax.ShapeDtypeStruct(oaccum_shape, jnp.float32),
                     jax.ShapeDtypeStruct(lseaccum_shape, jnp.float32),
@@ -120,6 +131,101 @@ def _flash_mha_fwd_lowering(q, k, v, *, softmax_scale: float | None, is_causal: 
     if dpad > 0:
         o = o[:,:,:,:d]
     return o, lse
+
+
+def _flash_mha_fwd_lowering_fa3(q, k, v, *,
+                                softmax_scale: float | None,
+                                is_causal: bool,
+                                window_size_left: int,
+                                window_size_right: int,
+                                softcap: float):
+    """FA3 (Hopper) lowering - uses hopper_flash_mha_fwd FFI."""
+    [n, lq, hq, d] = q.shape
+    [_, lk, hk, _] = k.shape
+    dtype = q.dtype
+
+    if softmax_scale is None:
+        softmax_scale = 1.0 / math.sqrt(d)
+
+    # Calculate num_splits (same heuristic as FA2)
+    if d <= 64:
+        block_n = 256
+    elif d <= 128:
+        block_n = 128
+    else:
+        block_n = 64
+    num_n_blocks = max(1, (lk + block_n - 1) // block_n)
+    num_m_blocks = max(1, (lq + 64 - 1) // 64)
+    sm_count = 114 # H100
+    num_splits = num_splits_heuristic(n * hq * num_m_blocks, sm_count, num_n_blocks, 128)
+    # Accumulator shapes match C++ layout: (num_splits, batch, num_heads, seqlen_q, head_dim)
+    lseaccum_shape = (num_splits, n, hq, lq)
+    oaccum_shape = (num_splits, n, hq, lq, d)
+
+    # Padding
+    dpad = (8 - d%8) % 8
+    if dpad > 0:
+        q = jnp.pad(q, ((0,0),(0,0),(0,0),(0,dpad)), 'constant')
+        k = jnp.pad(k, ((0,0),(0,0),(0,0),(0,dpad)), 'constant')
+        v = jnp.pad(v, ((0,0),(0,0),(0,0),(0,dpad)), 'constant')
+
+    o_shape = [n, lq, hq, d+dpad]
+    lse_shape = [n, hq, lq]
+
+    out_types = [jax.ShapeDtypeStruct(o_shape, dtype),
+                    jax.ShapeDtypeStruct(lse_shape, jnp.float32),
+                    jax.ShapeDtypeStruct(oaccum_shape, jnp.float32),
+                    jax.ShapeDtypeStruct(lseaccum_shape, jnp.float32),
+                    ]
+
+    o, lse = jax.ffi.ffi_call(
+        "hopper_flash_mha_fwd",
+        result_shape_dtypes=out_types,
+        has_side_effect=False,
+        input_layouts=[None, None, None],  # default row major
+        output_layouts=[None, None, None, None],
+    )(
+        q,
+        k,
+        v,
+        softmax_scale=np.float32(softmax_scale),
+        is_causal=is_causal,
+        window_size_left=window_size_left,
+        window_size_right=window_size_right,
+        softcap=np.float32(softcap),
+        num_splits=int(num_splits),
+    )[:2]
+
+    if dpad > 0:
+        o = o[:,:,:,:d]
+    return o, lse
+
+
+def _flash_mha_fwd_lowering(q, k, v, *,
+                            softmax_scale: float | None,
+                            is_causal: bool,
+                            window_size_left: int,
+                            window_size_right: int,
+                            backend: str,
+                            softcap: float):
+    """Dispatch to FA2 or FA3 lowering based on backend parameter."""
+    if backend == "fa3":
+        return _flash_mha_fwd_lowering_fa3(
+            q, k, v,
+            softmax_scale=softmax_scale,
+            is_causal=is_causal,
+            window_size_left=window_size_left,
+            window_size_right=window_size_right,
+            softcap=softcap,
+        )
+    else:  # backend == "fa2"
+        return _flash_mha_fwd_lowering_fa2(
+            q, k, v,
+            softmax_scale=softmax_scale,
+            is_causal=is_causal,
+            window_size_left=window_size_left,
+            window_size_right=window_size_right,
+        )
 
 
 def _flash_mha_fwd_lowering_mlir(ctx, q, k, v, **keywords):
@@ -178,7 +284,7 @@ def mha_fwd_batch(vector_arg_values: Sequence[Array], batch_axes, **kwargs):
 batching.primitive_batchers[_flash_mha_fwd_p] = mha_fwd_batch
 
 # ==== Sharding ====
-@partial(custom_partitioning, static_argnums=(3, 4, 5, 6))
+@partial(custom_partitioning, static_argnums=(3, 4, 5, 6, 7, 8))
 def _flash_mha_fwd_lowering_sharded(
     q,
     k,
@@ -187,6 +293,8 @@ def _flash_mha_fwd_lowering_sharded(
     is_causal: bool,
     window_size_left: int,
     window_size_right: int,
+    backend: str,
+    softcap: float,
 ):
     return _flash_mha_fwd_lowering(
         q,
@@ -196,6 +304,8 @@ def _flash_mha_fwd_lowering_sharded(
         is_causal=is_causal,
         window_size_left=window_size_left,
         window_size_right=window_size_right,
+        backend=backend,
+        softcap=softcap,
     )
 
 
@@ -205,6 +315,7 @@ def is_replicated(sharding):
     raise ValueError(f"Unsupported sharding type: {type(sharding)}")
 
 def partition_fwd(softmax_scale, is_causal, window_size_left, window_size_right,
+                  backend, softcap,
                   mesh: Mesh,
                   arg_shapes: List[jax.ShapeDtypeStruct],
                   result_shape: List[jax.ShapeDtypeStruct]):
@@ -224,7 +335,7 @@ def partition_fwd(softmax_scale, is_causal, window_size_left, window_size_right,
         result_shardings = q_sharding, NamedSharding(mesh, P(n,h,s))
         arg_shardings = q_sharding, q_sharding, q_sharding
     def fwd(q,k,v):
-        return _flash_mha_fwd_lowering(q,k,v, softmax_scale=softmax_scale, is_causal=is_causal, window_size_left=window_size_left, window_size_right=window_size_right)
+        return _flash_mha_fwd_lowering(q,k,v, softmax_scale=softmax_scale, is_causal=is_causal, window_size_left=window_size_left, window_size_right=window_size_right, backend=backend, softcap=softcap)
     return mesh, fwd, result_shardings, arg_shardings
 
 def sharding_rule_fwd(
@@ -232,6 +343,8 @@ def sharding_rule_fwd(
     is_causal: bool,
     window_size_left: int,
     window_size_right: int,
+    backend: str,
+    softcap: float,
     mesh: Mesh,
     arg_shapes: List[ir.RankedTensorType],
     result_shape: List[ir.RankedTensorType],

@@ -39,7 +39,9 @@ jax._src.dispatch.prim_requires_devices_during_lowering.add(_flash_mha_bwd_p)
 
 def flash_mha_bwd(dout, q, k, v, o, lse, *,
                   softmax_scale: Optional[float] = None, is_causal: bool = False,
-                  window_size_left: int = -1, window_size_right: int = -1):
+                  window_size_left: int = -1, window_size_right: int = -1, backend: str = "fa2", softcap: float | None = None):
+    if softcap is not None and softcap != 0.0:
+        raise ValueError("softcap is FA3-specific and should not be set for FA2 backward")
     kwargs = dict(
         softmax_scale=softmax_scale,
         is_causal=is_causal,

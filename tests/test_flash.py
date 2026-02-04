@@ -11,8 +11,10 @@ import math
 import einops
 
 from flash_attn_jax import flash_mha
+from flash_attn_jax.test_util import array_summary
 from .ref_mha import ref_mha
 
+jax.config.update('jax_traceback_filtering', 'off')
 jax.config.update("jax_default_matmul_precision", "highest")
 
 def pretty(tensor):
@@ -30,10 +32,12 @@ def check(ref_out, jax_out, out, margin=4):
     def check1(ref_out, jax_out, out):
         atol = margin * jnp.max(jnp.abs(jax_out - ref_out)).item()
         rtol = 1e-3
-        np.testing.assert_allclose(out, ref_out, rtol=rtol, atol=atol)
+        mismatch = ~np.isclose(out, ref_out, rtol=rtol, atol=atol)
+        np.testing.assert_allclose(out, ref_out, rtol=rtol, atol=atol, err_msg=array_summary.summarize_bool_array(mismatch))
     tree_map(check1, ref_out, jax_out, out)
 
     
+@pytest.mark.parametrize("backend", ["fa2", "fa3"])
 @pytest.mark.parametrize("dtype", [jnp.float16, jnp.bfloat16])
 @pytest.mark.parametrize("local", ['local',''])
 @pytest.mark.parametrize("causal", ['causal',''])
@@ -42,7 +46,7 @@ def check(ref_out, jax_out, out, margin=4):
 @pytest.mark.parametrize("seqlen", [97, 128])
 @pytest.mark.parametrize("n", [1])
 @pytest.mark.parametrize("m", [1, 2]) # for MQA/GQA
-def test_flash_fwd(n, seqlen, h, d, m, causal, local, dtype):
+def test_flash_fwd(n, seqlen, h, d, m, causal, local, dtype, backend: str):
     window_size = (3,3) if local else (-1,-1)
 
     q = jax.random.normal(jax.random.PRNGKey(0), [n, seqlen, h*m, d], dtype=jnp.float32)
@@ -53,7 +57,7 @@ def test_flash_fwd(n, seqlen, h, d, m, causal, local, dtype):
     k = k.astype(dtype)
     v = v.astype(dtype)
     jax_out = ref_mha(q,k,v, is_causal=bool(causal), window_size=window_size)
-    out = flash_mha(q,k,v, is_causal=bool(causal), window_size=window_size)
+    out = flash_mha(q,k,v, is_causal=bool(causal), window_size=window_size, backend=backend)
     check(ref_out, jax_out, out)
 
 @pytest.mark.parametrize("dtype", [jnp.float16, jnp.bfloat16])

@@ -2,15 +2,24 @@ cmake_minimum_required(VERSION 3.18)
 
 # Get CUDA architectures from environment or use default
 if(DEFINED ENV{FLASH_ATTN_CUDA_ARCHS})
-    set(CMAKE_CUDA_ARCHITECTURES $ENV{FLASH_ATTN_CUDA_ARCHS})
+    set(FLASH_ATTN_CUDA_ARCHS $ENV{FLASH_ATTN_CUDA_ARCHS})
 else()
-    # set(CMAKE_CUDA_ARCHITECTURES "80;90;100;120")
-    set(CMAKE_CUDA_ARCHITECTURES "80")
+    set(FLASH_ATTN_CUDA_ARCHS "90a")
 endif()
+
+message(STATUS "Using FLASH_ATTN_CUDA_ARCHS: ${FLASH_ATTN_CUDA_ARCHS}")
+
+# set(CMAKE_CUDA_ARCHITECTURES "80;90;100;120")
+set(CMAKE_CUDA_ARCHITECTURES ${FLASH_ATTN_CUDA_ARCHS})
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CUDA_STANDARD 17)
+set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
 project(flash_attn LANGUAGES CXX CUDA)
 
-set(CMAKE_JOB_POOLS cuda=6)
+set(CMAKE_JOB_POOLS cuda=6 cuda_hopper=16)
 set(CMAKE_INSTALL_RPATH "$ORIGIN/nvidia/cuda_runtime/lib")
 # Make sure RPATH is used instead of RUNPATH
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE)
@@ -63,8 +72,8 @@ if (${NO_OPTIONS_FILE})
 endif()
 
 # CUDA flags
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
+# set(CMAKE_CXX_STANDARD 20)
+# set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CUDA_FLAGS
     -O3
@@ -112,7 +121,6 @@ target_include_directories(flash_api PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/csrc/flash_attn/src
     ${CMAKE_CURRENT_SOURCE_DIR}/csrc/cutlass/include
     ${CMAKE_CURRENT_SOURCE_DIR}/csrc
-
 )
 
 target_link_libraries(flash_api PRIVATE
@@ -127,5 +135,155 @@ endif()
 
 # Installation
 install(TARGETS flash_api
+        DESTINATION ${SKBUILD_PLATLIB_DIR}/flash_attn_jax_lib
+)
+
+## === Hopper ===
+
+file(GLOB HOPPER_CUDA_SOURCES_SM80
+    "csrc/hopper/gpu/instantiations/*_sm80.cu"
+)
+file(GLOB HOPPER_CUDA_SOURCES_SM90
+    "csrc/hopper/gpu/instantiations/*_sm90.cu"
+)
+file(GLOB HOPPER_CUDA_SOURCES
+    "csrc/hopper/gpu/flash_prepare_scheduler.cu"
+    "csrc/hopper/gpu/flash_fwd_combine.cu",
+)
+
+file(GLOB HOPPER_CC_SOURCES
+    "csrc/hopper/flash_ffi_api.cpp"
+    "csrc/hopper/flash_ffi_common.cpp"
+    "csrc/hopper/mha_fwd_ffi.cpp"
+)
+
+set(FLASHATTENTION_DISABLE_SOFTCAP 1)
+set(FLASHATTENTION_DISABLE_PAGEDKV 1)
+set(FLASHATTENTION_DISABLE_FP8 1)
+
+# *all* files combine different files, don't need that I think
+list(FILTER HOPPER_CUDA_SOURCES_SM80 EXCLUDE REGEX "all")
+list(FILTER HOPPER_CUDA_SOURCES_SM90 EXCLUDE REGEX "all")
+
+if(FLASHATTENTION_DISABLE_SOFTCAP)
+    list(FILTER HOPPER_CUDA_SOURCES_SM80 EXCLUDE REGEX "softcap")
+    list(FILTER HOPPER_CUDA_SOURCES_SM90 EXCLUDE REGEX "softcap")
+endif()
+if(FLASHATTENTION_DISABLE_PAGEDKV)
+    list(FILTER HOPPER_CUDA_SOURCES_SM80 EXCLUDE REGEX "paged")
+    list(FILTER HOPPER_CUDA_SOURCES_SM90 EXCLUDE REGEX "paged")
+endif()
+if(FLASHATTENTION_DISABLE_FP8)
+    list(FILTER HOPPER_CUDA_SOURCES_SM80 EXCLUDE REGEX "e4m3")
+    list(FILTER HOPPER_CUDA_SOURCES_SM90 EXCLUDE REGEX "e4m3")
+endif()
+
+# Extract SM8x architectures (80 and 86)
+set(SM8x_CUDA_ARCHS ${FLASH_ATTN_CUDA_ARCHS})
+list(FILTER SM8x_CUDA_ARCHS INCLUDE REGEX "^(80|86)$")
+set(SM9x_CUDA_ARCHS ${FLASH_ATTN_CUDA_ARCHS})
+list(FILTER SM9x_CUDA_ARCHS EXCLUDE REGEX "^(80|86)$")
+
+
+if(NOT SM8x_CUDA_ARCHS)
+  set(FLASHATTENTION_DISABLE_SM8x 1)
+endif()
+
+
+
+set(HOPPER_CUDA_FLAGS
+    -O3
+    --use_fast_math
+    --expt-relaxed-constexpr
+    --expt-extended-lambda
+    -U__CUDA_NO_HALF_OPERATORS__
+    -U__CUDA_NO_HALF_CONVERSIONS__
+    -U__CUDA_NO_HALF2_OPERATORS__
+    -U__CUDA_NO_BFLOAT16_CONVERSIONS__
+    -DFLASHATTENTION_DISABLE_DROPOUT=1
+    -DFLASHATTENTION_DISABLE_ALIBI=1
+    $<$<BOOL:${FLASHATTENTION_DISABLE_SOFTCAP}>:-DFLASHATTENTION_DISABLE_SOFTCAP=1>
+    $<$<BOOL:${FLASHATTENTION_DISABLE_PAGEDKV}>:-DFLASHATTENTION_DISABLE_PAGEDKV=1>
+)
+set(HOPPER_CXX_FLAGS
+    -DFLASHATTENTION_DISABLE_DROPOUT=1
+    -DFLASHATTENTION_DISABLE_ALIBI=1
+    $<$<BOOL:${FLASHATTENTION_DISABLE_SOFTCAP}>:-DFLASHATTENTION_DISABLE_SOFTCAP=1>
+    $<$<BOOL:${FLASHATTENTION_DISABLE_PAGEDKV}>:-DFLASHATTENTION_DISABLE_PAGEDKV=1>
+    $<$<BOOL:${FLASHATTENTION_DISABLE_SM8x}>:-DFLASHATTENTION_DISABLE_SM8x=1>
+)
+
+# SM80 objects
+if(NOT FLASHATTENTION_DISABLE_SM8x)
+    add_library(hopper_sm80_objs OBJECT ${HOPPER_CUDA_SOURCES_SM80})
+    set_target_properties(hopper_sm80_objs PROPERTIES
+        CUDA_ARCHITECTURES ${SM8x_CUDA_ARCHS}
+        JOB_POOL_COMPILE cuda_hopper
+        POSITION_INDEPENDENT_CODE ON)
+    target_compile_options(hopper_sm80_objs PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:${HOPPER_CUDA_FLAGS}>
+    )
+    target_include_directories(hopper_sm80_objs PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/csrc/cutlass/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/csrc/hopper/gpu
+        ${CMAKE_CURRENT_SOURCE_DIR}/csrc
+    )
+endif()
+
+# SM90 objects
+add_library(hopper_sm90_objs OBJECT ${HOPPER_CUDA_SOURCES_SM90})
+set_target_properties(hopper_sm90_objs PROPERTIES
+    CUDA_ARCHITECTURES ${SM9x_CUDA_ARCHS}
+    JOB_POOL_COMPILE cuda_hopper
+    POSITION_INDEPENDENT_CODE ON)
+
+# Apply common compile options to both
+target_compile_options(hopper_sm90_objs PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:${HOPPER_CUDA_FLAGS}>
+)
+target_include_directories(hopper_sm90_objs PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/csrc/cutlass/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/csrc/hopper/gpu
+    ${CMAKE_CURRENT_SOURCE_DIR}/csrc
+)
+
+add_library(hopper_common_objs OBJECT ${HOPPER_CUDA_SOURCES})
+set_target_properties(hopper_common_objs PROPERTIES
+    CUDA_ARCHITECTURES ${FLASH_ATTN_CUDA_ARCHS}
+    JOB_POOL_COMPILE cuda_hopper
+    POSITION_INDEPENDENT_CODE ON)
+target_compile_options(hopper_common_objs PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:${HOPPER_CUDA_FLAGS}>
+)
+target_include_directories(hopper_common_objs PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/csrc/cutlass/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/csrc/hopper/gpu
+    ${CMAKE_CURRENT_SOURCE_DIR}/csrc
+)
+
+
+nanobind_add_module(flash_hopper_ffi
+    ${HOPPER_CC_SOURCES}
+    $<$<NOT:$<BOOL:${FLASHATTENTION_DISABLE_SM8x}>>:$<TARGET_OBJECTS:hopper_sm80_objs>>
+    $<TARGET_OBJECTS:hopper_sm90_objs>
+    $<TARGET_OBJECTS:hopper_common_objs>
+)
+set_property(TARGET flash_hopper_ffi PROPERTY JOB_POOL_COMPILE cuda_hopper)
+
+target_compile_options(flash_hopper_ffi PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:${HOPPER_CUDA_FLAGS}>
+    $<$<COMPILE_LANGUAGE:CXX>:${HOPPER_CXX_FLAGS}>
+)
+target_include_directories(flash_hopper_ffi PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/csrc/cutlass/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/csrc/hopper/gpu
+    ${CMAKE_CURRENT_SOURCE_DIR}/csrc
+)
+target_link_libraries(flash_hopper_ffi PRIVATE
+    CUDA::cudart
+    CUDA::cuda_driver
+)
+
+install(TARGETS flash_hopper_ffi
         DESTINATION ${SKBUILD_PLATLIB_DIR}/flash_attn_jax_lib
 )

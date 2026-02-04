@@ -1,5 +1,5 @@
 """Test configuration to enter debugging in vscode when tests fail."""
-
+import os
 import pytest
 import sys
 import threading
