@@ -147,57 +147,88 @@ def _flash_mha_fwd_lowering_fa3(q, k, v, *,
     if softmax_scale is None:
         softmax_scale = 1.0 / math.sqrt(d)
 
-    # Calculate num_splits (same heuristic as FA2)
-    if d <= 64:
-        block_n = 256
-    elif d <= 128:
-        block_n = 128
-    else:
-        block_n = 64
-    num_n_blocks = max(1, (lk + block_n - 1) // block_n)
-    num_m_blocks = max(1, (lq + 64 - 1) // 64)
-    sm_count = 114 # H100
-    num_splits = num_splits_heuristic(n * hq * num_m_blocks, sm_count, num_n_blocks, 128)
-    # Accumulator shapes match C++ layout: (num_splits, batch, num_heads, seqlen_q, head_dim)
-    lseaccum_shape = (num_splits, n, hq, lq)
-    oaccum_shape = (num_splits, n, hq, lq, d)
+    # Simplest case: no split-KV
+    num_splits = 1
 
-    # Padding
-    dpad = (8 - d%8) % 8
+    # Padding for head dimension alignment
+    dpad = (8 - d % 8) % 8
     if dpad > 0:
-        q = jnp.pad(q, ((0,0),(0,0),(0,0),(0,dpad)), 'constant')
-        k = jnp.pad(k, ((0,0),(0,0),(0,0),(0,dpad)), 'constant')
-        v = jnp.pad(v, ((0,0),(0,0),(0,0),(0,dpad)), 'constant')
+        q = jnp.pad(q, ((0, 0), (0, 0), (0, 0), (0, dpad)), 'constant')
+        k = jnp.pad(k, ((0, 0), (0, 0), (0, 0), (0, dpad)), 'constant')
+        v = jnp.pad(v, ((0, 0), (0, 0), (0, 0), (0, dpad)), 'constant')
 
-    o_shape = [n, lq, hq, d+dpad]
-    lse_shape = [n, hq, lq]
+    d_padded = d + dpad
 
-    out_types = [jax.ShapeDtypeStruct(o_shape, dtype),
-                    jax.ShapeDtypeStruct(lse_shape, jnp.float32),
-                    jax.ShapeDtypeStruct(oaccum_shape, jnp.float32),
-                    jax.ShapeDtypeStruct(lseaccum_shape, jnp.float32),
-                    ]
+    # Output shapes
+    o_shape = (n, lq, hq, d_padded)
+    lse_shape = (n, hq, lq)
+    oaccum_shape = (num_splits, n, hq, lq, d_padded)
+    lseaccum_shape = (num_splits, n, hq, lq)
+    # Scheduler metadata: minimal allocation for simplest case
+    scheduler_metadata_shape = (1,)
 
-    o, lse = jax.ffi.ffi_call(
+    out_types = [
+        jax.ShapeDtypeStruct(o_shape, dtype),
+        jax.ShapeDtypeStruct(lse_shape, jnp.float32),
+        jax.ShapeDtypeStruct(oaccum_shape, jnp.float32),
+        jax.ShapeDtypeStruct(lseaccum_shape, jnp.float32),
+        jax.ShapeDtypeStruct(scheduler_metadata_shape, jnp.int32),
+    ]
+
+    # Empty tensors for optional parameters (0-dimensional)
+    empty_any = jnp.zeros((), dtype=dtype)  # For AnyBuffer optionals
+    empty_i32 = jnp.zeros((), dtype=jnp.int32)  # For S32 buffer optionals
+    empty_f32 = jnp.zeros((), dtype=jnp.float32)  # For F32 buffer optionals
+
+    # 18 inputs, 5 outputs
+    o, lse, _, _, _ = jax.ffi.ffi_call(
         "hopper_flash_mha_fwd",
         result_shape_dtypes=out_types,
         has_side_effect=False,
-        input_layouts=[None, None, None],  # default row major
-        output_layouts=[None, None, None, None],
+        input_layouts=[None] * 18,
+        output_layouts=[None] * 5,
     )(
+        # Required inputs
         q,
         k,
         v,
-        softmax_scale=np.float32(softmax_scale),
+        # Optional AnyBuffer inputs (empty)
+        empty_any,  # k_new
+        empty_any,  # v_new
+        empty_any,  # q_v
+        # Optional S32 buffer inputs (empty)
+        empty_i32,  # cu_seqlens_q
+        empty_i32,  # cu_seqlens_k
+        empty_i32,  # cu_seqlens_k_new
+        empty_i32,  # page_table
+        empty_i32,  # kv_batch_idx
+        empty_i32,  # leftpad_k
+        # Optional AnyBuffer inputs (empty)
+        empty_any,  # rotary_cos
+        empty_any,  # rotary_sin
+        # Optional S32 buffer inputs (empty)
+        empty_i32,  # seqlens_rotary
+        # Optional F32 buffer inputs (empty) - descale arrays
+        empty_f32,  # q_descale
+        empty_f32,  # k_descale
+        empty_f32,  # v_descale
+        # Scalar attributes
+        max_seqlen_q=np.int64(lq),
+        max_seqlen_k=np.int64(lk),
+        softmax_scale=np.float64(softmax_scale),
         is_causal=is_causal,
-        window_size_left=window_size_left,
-        window_size_right=window_size_right,
-        softcap=np.float32(softcap),
-        num_splits=int(num_splits),
-    )[:2]
+        window_size_left=np.int64(window_size_left),
+        window_size_right=np.int64(window_size_right),
+        attention_chunk=np.int64(0),
+        softcap=np.float64(softcap),
+        is_rotary_interleaved=False,
+        num_splits=np.int64(num_splits),
+        pack_gqa=False,
+        sm_margin=np.int64(0),
+    )
 
     if dpad > 0:
-        o = o[:,:,:,:d]
+        o = o[:, :, :, :d]
     return o, lse
 
 

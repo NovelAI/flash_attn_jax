@@ -64,27 +64,34 @@ private:
   return _error
 
 // Forward declarations
-ffi::Error set_params_fprop_ffi(
-    Flash_fwd_params &params,
-    ffi::DataType element_type,
-    // sizes
-    const size_t b,
-    const size_t seqlen_q,
-    const size_t seqlen_k,
-    const size_t h,
-    const size_t h_k,
-    const size_t d,
-    // device pointers
-    void *q_ptr,
-    void *k_ptr,
-    void *v_ptr,
-    void *out_ptr,
-    void *softmax_lse_ptr,
-    void *oaccum_ptr,
-    void *lseaccum_ptr,
-    float softmax_scale,
-    float softcap,
-    int window_size_left,
-    int window_size_right,
-    int num_splits
-);
+
+ffi::Error set_params_fprop_ffi(Flash_fwd_params &params,
+                        cudaStream_t stream,
+                        int device_ordinal,
+                      // sizes
+                      const size_t b,
+                      const size_t seqlen_q,
+                      const size_t seqlen_k,
+                      const size_t seqlen_q_rounded,
+                      const size_t seqlen_k_rounded,
+                      const size_t h,
+                      const size_t h_k,
+                      const size_t d,
+                      const size_t d_rounded,
+                      // device pointers
+                      const ffi::AnyBuffer& q,
+                      const ffi::AnyBuffer& k,
+                      const ffi::AnyBuffer& v,
+                      ffi::AnyBuffer& out,
+                      void *cu_seqlens_q_d,
+                      void *cu_seqlens_k_d,
+                      void *seqused_q,
+                      void *seqused_k,
+                      void *softmax_lse_d,
+                      float p_dropout,
+                      float softmax_scale,
+                      int window_size_left,
+                      int window_size_right,
+                      int attention_chunk,
+                      const float softcap=0.f,
+                      const int sm_margin=0);

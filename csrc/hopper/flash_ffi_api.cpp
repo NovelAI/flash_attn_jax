@@ -34,16 +34,38 @@ XLA_FFI_DEFINE_HANDLER(
         .Arg<ffi::AnyBuffer>()  // q
         .Arg<ffi::AnyBuffer>()  // k
         .Arg<ffi::AnyBuffer>()  // v
+        .Arg<ffi::AnyBuffer>()  // k_new
+        .Arg<ffi::AnyBuffer>()  // v_new
+        .Arg<ffi::AnyBuffer>()  // q_v
+        .Arg<ffi::Buffer<ffi::S32>>()  // cu_seqlens_q
+        .Arg<ffi::Buffer<ffi::S32>>()  // cu_seqlens_k
+        .Arg<ffi::Buffer<ffi::S32>>()  // cu_seqlens_k_new
+        .Arg<ffi::Buffer<ffi::S32>>()  // page_table
+        .Arg<ffi::Buffer<ffi::S32>>()  // kv_batch_idx
+        .Arg<ffi::Buffer<ffi::S32>>()  // leftpad_k
+        .Arg<ffi::AnyBuffer>()  // rotary_cos
+        .Arg<ffi::AnyBuffer>()  // rotary_sin
+        .Arg<ffi::Buffer<ffi::S32>>()  // seqlens_rotary
+        .Arg<ffi::Buffer<ffi::F32>>()  // q_descale
+        .Arg<ffi::Buffer<ffi::F32>>()  // k_descale
+        .Arg<ffi::Buffer<ffi::F32>>()  // v_descale
         .Ret<ffi::AnyBuffer>()  // out
         .Ret<ffi::Buffer<ffi::F32>>()  // softmax_lse
         .Ret<ffi::Buffer<ffi::F32>>()  // out_accum
         .Ret<ffi::Buffer<ffi::F32>>()  // softmax_lse_accum
-        .Attr<float>("softmax_scale")
+        .Ret<ffi::Buffer<ffi::S32>>()  // scheduler_metadata
+        .Attr<int64_t>("max_seqlen_q")
+        .Attr<int64_t>("max_seqlen_k")
+        .Attr<double>("softmax_scale")
         .Attr<bool>("is_causal")
         .Attr<int64_t>("window_size_left")
         .Attr<int64_t>("window_size_right")
-        .Attr<float>("softcap")
+        .Attr<int64_t>("attention_chunk")
+        .Attr<double>("softcap")
+        .Attr<bool>("is_rotary_interleaved")
         .Attr<int64_t>("num_splits")
+        .Attr<bool>("pack_gqa")
+        .Attr<int64_t>("sm_margin")
 );
 
 // FFI registrations dictionary
