@@ -92,6 +92,7 @@ def test_flash_bwd(n, seqlen, h, d, m, causal, local, dtype):
     out = flash((q,k,v))
     check(ref_out, jax_out, out)
 
+@pytest.mark.parametrize("backend", ["fa2", "fa3"])
 @pytest.mark.parametrize("dtype", [jnp.float16, jnp.bfloat16])
 @pytest.mark.parametrize("local", ['local',''])
 @pytest.mark.parametrize("causal", ['causal',''])
@@ -99,7 +100,7 @@ def test_flash_bwd(n, seqlen, h, d, m, causal, local, dtype):
 @pytest.mark.parametrize("h", [1, 4])
 @pytest.mark.parametrize("seqlen", [97, 128])
 @pytest.mark.parametrize("n", [1])
-def test_flash_fwd_vmap(n, seqlen, h, d, causal, local, dtype):
+def test_flash_fwd_vmap(n, seqlen, h, d, causal, local, dtype, backend: str):
     window_size = (3,3) if local else (-1,-1)
 
     x = 4
@@ -110,7 +111,7 @@ def test_flash_fwd_vmap(n, seqlen, h, d, causal, local, dtype):
     def ref(q,k,v):
         return ref_mha(q,k,v, is_causal=bool(causal), window_size=window_size)
     def flash(q,k,v):
-        return flash_mha(q,k,v, is_causal=bool(causal), window_size=window_size)
+        return flash_mha(q,k,v, is_causal=bool(causal), window_size=window_size, backend=backend)
 
     ref_out = jax.vmap(ref)(q,k,v)
     q = q.astype(dtype)
@@ -128,7 +129,8 @@ def test_flash_fwd_vmap(n, seqlen, h, d, causal, local, dtype):
 @pytest.mark.parametrize("h", [1, 4])
 @pytest.mark.parametrize("seqlen", [97, 128])
 @pytest.mark.parametrize("n", [1])
-def test_flash_fwd_vmapq(n, seqlen, h, d, causal, local, dtype):
+@pytest.mark.parametrize("backend", ["fa2", "fa3"])
+def test_flash_fwd_vmapq(n, seqlen, h, d, causal, local, dtype, backend: str):
     window_size = (3,3) if local else (-1,-1)
 
     x = 4
@@ -139,7 +141,7 @@ def test_flash_fwd_vmapq(n, seqlen, h, d, causal, local, dtype):
     def ref(q,k,v):
         return ref_mha(q,k,v, is_causal=bool(causal), window_size=window_size)
     def flash(q,k,v):
-        return flash_mha(q,k,v, is_causal=bool(causal), window_size=window_size)
+        return flash_mha(q,k,v, is_causal=bool(causal), window_size=window_size, backend=backend)
 
     ref_out = jax.vmap(ref, in_axes=(0,None,None))(q,k,v)
     q = q.astype(dtype)

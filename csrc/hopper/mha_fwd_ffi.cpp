@@ -89,9 +89,35 @@ inline bool check_shape_impl(const Actual& actual_dims, Dims... expected) {
            std::equal(actual_dims.begin(), actual_dims.end(), expected_dims.begin());
 }
 
+template<typename... Dims>
+std::string render_varargs_shape(Dims... dims) {
+    std::string result = "[";
+    ((result += std::to_string(dims) + ", "), ...);
+    if (!result.empty()) {
+        result.pop_back(); // remove last space
+        result.pop_back(); // remove last comma
+    }
+    result += "]";
+    return result;
+}
+
+template<typename Dims>
+std::string render_dims_shape(const Dims& dims) {
+    std::string result = "[";
+    for (size_t i = 0; i < dims.size(); ++i) {
+        result += std::to_string(dims[i]);
+        if (i + 1 < dims.size()) {
+            result += ", ";
+        }
+    }
+    result += "]";
+    return result;
+}
+
 #define CHECK_SHAPE(buf, ...)                                                                         \
   FFI_CHECK(check_shape_impl((buf).dimensions(), __VA_ARGS__))                                       \
-      << #buf << " must have shape (" #__VA_ARGS__ ")"
+      << #buf << " must have shape (" #__VA_ARGS__ ")"                                             \
+      << " (actual shape: " << render_dims_shape((buf).dimensions()) << "; expected shape: (" << render_varargs_shape(__VA_ARGS__) << "))"
 
 template <typename Buffer>
 std::vector<int64_t> get_strides(const Buffer& buf) {

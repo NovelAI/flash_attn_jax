@@ -17,6 +17,10 @@ from jax.experimental.custom_partitioning import (
     SdyShardingRule,
     custom_partitioning,
 )
+from flash_attn_jax.fa3_util import (
+    get_num_splits_fa3,
+    calculate_scheduler_metadata_size,
+)
 
 from jax.extend.core import Primitive
 from jax.interpreters import batching, mlir, xla
@@ -147,8 +151,40 @@ def _flash_mha_fwd_lowering_fa3(q, k, v, *,
     if softmax_scale is None:
         softmax_scale = 1.0 / math.sqrt(d)
 
-    # Simplest case: no split-KV
-    num_splits = 1
+    # Calculate is_local from window_size parameters
+    is_local = (window_size_left >= 0 or window_size_right >= 0) # and not is_causal
+
+    # Calculate num_splits using SM90 (H100) heuristic
+    num_splits = get_num_splits_fa3(
+        batch_size=n,
+        seqlen_q=lq,
+        seqlen_k=lk,
+        num_heads=hq,
+        num_heads_k=hk,
+        head_dim=d,
+        head_dim_v=d,  # Currently same as head_dim
+        is_causal=is_causal,
+        is_local=is_local,
+        window_size_left=window_size_left,
+        window_size_right=window_size_right,
+        dtype=dtype,
+        num_sm=114,  # H100 SXM5 default
+        max_splits=128,
+    )
+
+    # Calculate scheduler_metadata size
+    metadata_size = calculate_scheduler_metadata_size(
+        batch_size=n,
+        num_splits=num_splits,
+        is_causal=is_causal,
+        is_local=is_local,
+        arch=90,  # SM90 (Hopper)
+    )
+
+    # print('Computing num_splits and metadata_size for configuration:')
+    # print(f'batch_size={n}, seqlen_q={lq}, seqlen_k={lk}, num_heads={hq}, num_heads_k={hk}, head_dim={d}, is_causal={is_causal}, is_local={is_local}, window_size_left={window_size_left}, window_size_right={window_size_right}, dtype={dtype}, num_sm=114, max_splits=128')
+    # print(f'batch_size={n}, num_splits={num_splits}, is_causal={is_causal}, is_local={is_local}, arch=90')
+    # print('num_splits:', num_splits, 'metadata_size:', metadata_size)
 
     # Padding for head dimension alignment
     dpad = (8 - d % 8) % 8
@@ -164,8 +200,7 @@ def _flash_mha_fwd_lowering_fa3(q, k, v, *,
     lse_shape = (n, hq, lq)
     oaccum_shape = (num_splits, n, hq, lq, d_padded)
     lseaccum_shape = (num_splits, n, hq, lq)
-    # Scheduler metadata: minimal allocation for simplest case
-    scheduler_metadata_shape = (1,)
+    scheduler_metadata_shape = (metadata_size,)
 
     out_types = [
         jax.ShapeDtypeStruct(o_shape, dtype),
