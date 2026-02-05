@@ -208,10 +208,10 @@ def _flash_mha_varlen_fwd_hlo_lowering_fa3(
         arch=90,
     )
 
-    print('[varlen] Computing num_splits and metadata_size for configuration:')
-    print(f'[varlen] batch_size={1}, seqlen_q={max_seqlen_q}, seqlen_k={max_seqlen_k}, num_heads={h}, num_heads_k={hk}, head_dim={d}, is_causal={is_causal}, is_local={is_local}, window_size_left={window_size_left}, window_size_right={window_size_right}, dtype={dtype}, num_sm=114, max_splits=128')
-    print(f'[varlen] batch_size={b}, num_splits={num_splits}, is_causal={is_causal}, is_local={is_local}, arch=90')
-    print('[varlen] computed num_splits:', num_splits, 'metadata_size:', metadata_size)
+    # print('[varlen] Computing num_splits and metadata_size for configuration:')
+    # print(f'[varlen] batch_size={1}, seqlen_q={max_seqlen_q}, seqlen_k={max_seqlen_k}, num_heads={h}, num_heads_k={hk}, head_dim={d}, is_causal={is_causal}, is_local={is_local}, window_size_left={window_size_left}, window_size_right={window_size_right}, dtype={dtype}, num_sm=114, max_splits=128')
+    # print(f'[varlen] batch_size={b}, num_splits={num_splits}, is_causal={is_causal}, is_local={is_local}, arch=90')
+    # print('[varlen] computed num_splits:', num_splits, 'metadata_size:', metadata_size)
 
     # Padding for head dimension alignment
     dpad = (8 - d % 8) % 8

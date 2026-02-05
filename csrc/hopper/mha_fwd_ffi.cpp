@@ -664,7 +664,7 @@ mha_fwd_ffi_impl(
     bool const scheduler_needs_semaphore = params.arch >= 90
         ? (((params.is_causal || params.is_local) && (params.num_splits == 1)) || is_varlen)
         : ((params.is_causal && !is_varlen) || (is_varlen && params.num_splits > 1));
-    std::cerr << "[DEBUG] scheduler_needs_semaphore=" << scheduler_needs_semaphore << ", is_varlen=" << is_varlen << ", is_causal=" << params.is_causal << ", is_local=" << params.is_local << ", num_splits=" << params.num_splits << "\n";
+    // std::cerr << "[DEBUG] scheduler_needs_semaphore=" << scheduler_needs_semaphore << ", is_varlen=" << is_varlen << ", is_causal=" << params.is_causal << ", is_local=" << params.is_local << ", num_splits=" << params.num_splits << "\n";
     params.varlen_sort_batches = !params.is_local; // Use this value for Sort in scheduler template
     params.head_swizzle = params.is_causal || params.is_local; // Use this value for LPT in scheduler template
     if (scheduler_needs_semaphore || use_prepare_varlen) {
