@@ -24,6 +24,9 @@ var/
 *.whl
 .eggs
 
+# dynamic version
+_version.py
+
 # IDE-related
 .idea/
 *.local.json
