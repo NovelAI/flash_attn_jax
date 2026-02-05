@@ -1,23 +1,13 @@
-from dataclasses import dataclass, asdict
-from functools import partial, wraps
+import os
+from dataclasses import asdict, dataclass
 from typing import Optional
 
-import numpy as np
 import jax
-from jax import core, dtypes
-from jax.core import ShapedArray
-from jax.interpreters import batching
-from jax.interpreters import mlir
-from jax.interpreters import xla
-from jax.extend.core import Primitive
 import jax._src.dispatch
-
-from einops import rearrange
-import einops
-import math
 
 from .varlen_bwd import flash_mha_varlen_bwd
 from .varlen_fwd import flash_mha_varlen_fwd
+
 
 @jax.tree_util.register_static
 @dataclass
@@ -46,7 +36,9 @@ _flash_mha_varlen_vjp.defvjp(_flash_mha_varlen_vjp_fwd, _flash_mha_varlen_vjp_bw
 def flash_mha_varlen(q, k, v, seqlens_q, seqlens_k=None, *,
                      max_seqlen_q: int = -1, max_seqlen_k: int = -1,
                      softmax_scale: Optional[float] = None, is_causal: bool = False,
-                     window_size: tuple = (-1, -1), backend: str = "fa2"):
+                     window_size: tuple = (-1, -1), backend: Optional[str] = None):
+    if backend is None:
+        backend = os.environ.get("FLASH_ATTN_JAX_BACKEND", "fa2")
     if seqlens_k is None:
         seqlens_k = seqlens_q
     config = FlashConfig(

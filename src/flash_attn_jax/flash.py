@@ -1,25 +1,11 @@
-from jax.extend.mlir.dialects.func import NoneType
-from dataclasses import dataclass, asdict, replace
-from functools import partial, wraps
+import os
+from dataclasses import asdict, dataclass, replace
 
-import numpy as np
 import jax
 import jax.numpy as jnp
-from jax import core, dtypes
-from jax.core import ShapedArray
-from jax.interpreters import batching
-from jax.interpreters import mlir
-from jax.interpreters import xla
-from jax.extend.core import Primitive
 
-from einops import rearrange
-import einops
-import math
-
-from .flash_fwd import flash_mha_fwd
 from .flash_bwd import flash_mha_bwd
-
-
+from .flash_fwd import flash_mha_fwd
 
 # ==== VJP Rule ====
 
@@ -55,7 +41,7 @@ _flash_mha_vjp.defvjp(_flash_mha_vjp_fwd, _flash_mha_vjp_bwd)
 
 # ==== Frontend ====
 
-def flash_mha(q, k, v, softmax_scale=None, is_causal=False, window_size=(-1,-1), backend="fa2", softcap=0.0):
+def flash_mha(q, k, v, softmax_scale=None, is_causal=False, window_size=(-1,-1), backend: str | None = None, softcap=0.0):
     """Flash attention.
 
     Args:
@@ -76,6 +62,8 @@ def flash_mha(q, k, v, softmax_scale=None, is_causal=False, window_size=(-1,-1),
         - FA3 currently only supports forward pass. Gradients automatically use FA2 backward.
         - Softcap parameter is only used with FA3 backend
     """
+    if backend is None:
+        backend = os.environ.get("FLASH_ATTN_JAX_BACKEND", "fa2")
     [nq, sq, hq, dq] = q.shape
     [nk, sk, hk, dk] = k.shape
     [nv, sv, hv, dv] = v.shape
