@@ -19,7 +19,14 @@ set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
 project(flash_attn LANGUAGES CXX CUDA)
 
-set(CMAKE_JOB_POOLS cuda=6 cuda_hopper=16)
+if(DEFINED ENV{MAX_JOBS} AND NOT "$ENV{MAX_JOBS}" STREQUAL "")
+    set(MAX_JOBS $ENV{MAX_JOBS})
+else()
+    set(MAX_JOBS 6)
+endif()
+message(STATUS "Using MAX_JOBS: ${MAX_JOBS}")
+
+set(CMAKE_JOB_POOLS cuda=${MAX_JOBS} cxx=${MAX_JOBS})
 set(CMAKE_INSTALL_RPATH "$ORIGIN/nvidia/cuda_runtime/lib")
 # Make sure RPATH is used instead of RUNPATH
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE)
@@ -219,7 +226,7 @@ if(NOT FLASHATTENTION_DISABLE_SM8x)
     add_library(hopper_sm80_objs OBJECT ${HOPPER_CUDA_SOURCES_SM80})
     set_target_properties(hopper_sm80_objs PROPERTIES
         CUDA_ARCHITECTURES ${SM8x_CUDA_ARCHS}
-        JOB_POOL_COMPILE cuda_hopper
+        JOB_POOL_COMPILE cuda
         POSITION_INDEPENDENT_CODE ON)
     target_compile_options(hopper_sm80_objs PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:${HOPPER_CUDA_FLAGS}>
@@ -235,7 +242,7 @@ endif()
 add_library(hopper_sm90_objs OBJECT ${HOPPER_CUDA_SOURCES_SM90})
 set_target_properties(hopper_sm90_objs PROPERTIES
     CUDA_ARCHITECTURES ${SM9x_CUDA_ARCHS}
-    JOB_POOL_COMPILE cuda_hopper
+    JOB_POOL_COMPILE cuda
     POSITION_INDEPENDENT_CODE ON)
 
 # Apply common compile options to both
@@ -251,7 +258,7 @@ target_include_directories(hopper_sm90_objs PRIVATE
 add_library(hopper_common_objs OBJECT ${HOPPER_CUDA_SOURCES})
 set_target_properties(hopper_common_objs PROPERTIES
     CUDA_ARCHITECTURES ${FLASH_ATTN_CUDA_ARCHS}
-    JOB_POOL_COMPILE cuda_hopper
+    JOB_POOL_COMPILE cuda
     POSITION_INDEPENDENT_CODE ON)
 target_compile_options(hopper_common_objs PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:${HOPPER_CUDA_FLAGS}>
@@ -269,7 +276,7 @@ nanobind_add_module(flash_hopper_ffi
     $<TARGET_OBJECTS:hopper_sm90_objs>
     $<TARGET_OBJECTS:hopper_common_objs>
 )
-set_property(TARGET flash_hopper_ffi PROPERTY JOB_POOL_COMPILE cuda_hopper)
+set_property(TARGET flash_hopper_ffi PROPERTY JOB_POOL_COMPILE cuda)
 
 target_compile_options(flash_hopper_ffi PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:${HOPPER_CUDA_FLAGS}>
