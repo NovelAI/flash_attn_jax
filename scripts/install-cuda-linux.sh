@@ -47,7 +47,8 @@ dnf -y install \
     cuda-compiler-"${VER}" \
     cuda-minimal-build-"${VER}" \
     cuda-nvtx-"${VER}" \
-    cuda-nvrtc-devel-"${VER}"
+    cuda-nvrtc-devel-"${VER}" \
+    cuda-driver-devel-"${VER}"
 
     # cuda-libraries-devel-${VER} \
 # dnf clean all
