@@ -42,13 +42,7 @@ def assert_allclose_quantiles(actual, desired, tol: Sequence[tuple[float,float,f
         if jnp.sum(mismatch) > 0:
             raise AssertionError(f'Quantile {q} check failed for rtol={rtol}, atol={atol}. Mismatch summary:\n{array_summary.summarize_bool_array(mismatch)}')
 
-# @pytest.mark.parametrize("d", [59, 32])
-# @pytest.mark.parametrize("h", [4])
-# @pytest.mark.parametrize("seqlen_q", [32, 97, 128])
-# @pytest.mark.parametrize("seqlen_k", [32, 63])
-# @pytest.mark.parametrize("n", [1])
-# @pytest.mark.parametrize("m", [1, 2]) # for MQA/GQA
-# @pytest.mark.parametrize("is_causal", [False, True])
+
 @pytest.mark.parametrize("dtype", [jnp.float16, jnp.bfloat16])
 @pytest.mark.parametrize("backend", ["fa2", "fa3"])
 @settings(deadline=None)

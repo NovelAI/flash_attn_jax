@@ -686,11 +686,11 @@ mha_fwd_ffi_impl(
         // }
         // if (scheduler_needs_semaphore && !use_prepare_varlen) {
         // manually zero it
-        cudaMemsetAsync(
+        FFI_CUDA_CHECK(cudaMemsetAsync(
             tile_count_semaphore.untyped_data(),
             0,
             tile_count_semaphore.size_bytes(),
-            stream);
+            stream));
         // }
         // {num_splits_dynamic, num_m_blocks, varlen_batch_idx, num_nheads_in_l2}
         params.num_splits_dynamic_ptr = use_prepare_varlen ? tile_count_semaphore.typed_data() : nullptr;
@@ -865,8 +865,8 @@ mha_fwd_ffi_impl(
     } else if (total_q > 0 && num_heads_k > 0) {
         // If seqlen_k == 0, then we have an empty tensor. We need to set the output to 0.
         // This may seem cursed, but that's because it is. 0xFEFEFEFE is approximately -1.69e+38, which is close enough to -inf.
-        cudaMemsetAsync(out->untyped_data(), 0, out->size_bytes(), stream);
-        cudaMemsetAsync(out->untyped_data(), 0xFE, out->size_bytes(), stream);
+        FFI_CUDA_CHECK(cudaMemsetAsync(out->untyped_data(), 0, out->size_bytes(), stream));
+        FFI_CUDA_CHECK(cudaMemsetAsync(out->untyped_data(), 0xFE, out->size_bytes(), stream));
     }
 
     // return {out, softmax_lse};
