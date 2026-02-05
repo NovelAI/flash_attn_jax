@@ -107,41 +107,41 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  publish_package:
-    name: Publish package
-    needs: [create_release]
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
+  # publish_package:
+  #   name: Publish package
+  #   needs: [create_release]
+  #   runs-on: ubuntu-latest
+  #   permissions:
+  #     id-token: write
 
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.RELEASE_TAG }}
-          submodules: recursive
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #       with:
+  #         ref: ${{ env.RELEASE_TAG }}
+  #         submodules: recursive
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+  #     - uses: actions/setup-python@v5
+  #       with:
+  #         python-version: '3.11'
 
-      - name: Install dependencies
-        run: |
-          pip install uv
+  #     - name: Install dependencies
+  #       run: |
+  #         pip install uv
 
-      - name: Build core package
-        run: |
-          uv build --sdist
+  #     - name: Build core package
+  #       run: |
+  #         uv build --sdist
 
-      - name: Retrieve release distributions
-        uses: actions/download-artifact@v4
-        with:
-          path: dist/
-          pattern: wheel-*-cu12.8
-          merge-multiple: true
+  #     - name: Retrieve release distributions
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         path: dist/
+  #         pattern: wheel-*-cu12.8
+  #         merge-multiple: true
 
-      - name: Remove CUDA tag for pypi
-        run: |
-          python3 set_tag_in_wheels.py "" dist/*+cu12.8*.whl
+  #     - name: Remove CUDA tag for pypi
+  #       run: |
+  #         python3 set_tag_in_wheels.py "" dist/*+cu12.8*.whl
 
-      - name: Publish release distributions to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+  #     - name: Publish release distributions to PyPI
+  #       uses: pypa/gh-action-pypi-publish@release/v1
