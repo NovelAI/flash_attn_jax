@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <cuda.h>
+#include <cstdint>
 #include <cuda_runtime.h>
 #include <vector>
 

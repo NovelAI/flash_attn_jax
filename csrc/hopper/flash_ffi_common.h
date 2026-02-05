@@ -6,7 +6,6 @@
 
 #include <cstdio>
 #include <cuda_runtime_api.h>
-#include <driver_types.h>
 #include <string>
 #include <sstream>
 
