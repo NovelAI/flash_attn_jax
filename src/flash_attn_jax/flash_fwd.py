@@ -1,3 +1,4 @@
+import os
 import math
 import re
 from functools import partial, wraps
@@ -29,7 +30,7 @@ from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 
 from flash_attn_jax.ring_attention import ring_fwd
-from flash_attn_jax.util import num_splits_heuristic, array_mapping
+from flash_attn_jax.util import num_splits_heuristic, round_multiple, array_mapping, get_sm_count
 
 # ==== Register primitives ====
 
@@ -98,11 +99,14 @@ def _flash_mha_fwd_lowering_fa2(q, k, v, *,
         block_n = 64
     num_n_blocks = max(1, (lk + block_n - 1) // block_n)
     num_m_blocks = max(1, (lq + 64 - 1) // 64)
-    sm_count = 114 # H100
-    num_splits = num_splits_heuristic(n * hq * num_m_blocks, sm_count, num_n_blocks, 128)
-    # Accumulator shapes match C++ layout: (num_splits, batch, num_heads, seqlen_q, head_dim)
+    sm_count = get_sm_count()
+    num_splits = num_splits_heuristic(n * hq * num_m_blocks, sm_count * 2, num_n_blocks, 128)
     lseaccum_shape = (num_splits, n, hq, lq)
     oaccum_shape = (num_splits, n, hq, lq, d)
+
+    if os.environ.get("FLASH_ATTN_JAX_DEBUG", '0') == '1':
+        print(f"[flash_attn_jax] fwd_lowering: n={n} lq={lq} lk={lk} hq={hq} d={d} dtype={dtype} "
+              f"block_n={block_n} num_n_blocks={num_n_blocks} num_m_blocks={num_m_blocks} sm_count={sm_count} num_splits={num_splits}")
 
     dpad = (8 - d%8) % 8
     if dpad > 0:

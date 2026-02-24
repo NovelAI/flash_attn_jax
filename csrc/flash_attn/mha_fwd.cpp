@@ -130,15 +130,24 @@ ffi::Error mha_fwd_impl(cudaStream_t stream,
 	int sm_count;
 	FFI_CUDA_CHECK(cudaDeviceGetAttribute(&sm_count, cudaDevAttrMultiProcessorCount, device));
 
-    int max_splits = oaccum->dimensions()[0];
+    int num_splits = oaccum->dimensions()[0];
     FFI_RET_CHECK(set_params_splitkv(params, batch_size, num_heads,
                        head_size, seqlen_k, seqlen_q,
-                       head_size_rounded, 0.0, /*num_splits*/0, sm_count,
-                        dtype, max_splits, oaccum->untyped_data(), lseaccum->untyped_data()));
+                       head_size_rounded, 0.0, /*num_splits*/num_splits, sm_count,
+                        dtype, num_splits, oaccum->untyped_data(), lseaccum->untyped_data()));
 
     int64_t counter_offset = params.b * params.h * 32;
 
     params.alibi_slopes_ptr = nullptr;
+
+    if (flash_debug()) {
+        fprintf(stderr, "[flash_attn_jax] mha_fwd: batch=%d seqlen_q=%d seqlen_k=%d num_heads=%d num_heads_k=%d "
+                "head_size=%d head_size_rounded=%d seqlen_q_rounded=%d seqlen_k_rounded=%d "
+                "num_splits=%d is_causal=%d sm_count=%d\n",
+                batch_size, seqlen_q, seqlen_k, num_heads, num_heads_k,
+                head_size, head_size_rounded, seqlen_q_rounded, seqlen_k_rounded,
+                params.num_splits, params.is_causal, sm_count);
+    }
 
     if (seqlen_k > 0) {
 		run_mha_fwd(params, stream);
