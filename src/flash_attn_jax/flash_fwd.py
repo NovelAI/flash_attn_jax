@@ -101,8 +101,9 @@ def _flash_mha_fwd_lowering_fa2(q, k, v, *,
     num_m_blocks = max(1, (lq + 64 - 1) // 64)
     sm_count = get_sm_count()
     num_splits = num_splits_heuristic(n * hq * num_m_blocks, sm_count * 2, num_n_blocks, 128)
+    head_size_rounded = round_multiple(d, 32)
     lseaccum_shape = (num_splits, n, hq, lq)
-    oaccum_shape = (num_splits, n, hq, lq, d)
+    oaccum_shape = (num_splits, n, hq, lq, head_size_rounded)
 
     if os.environ.get("FLASH_ATTN_JAX_DEBUG", '0') == '1':
         print(f"[flash_attn_jax] fwd_lowering: n={n} lq={lq} lk={lk} hq={hq} d={d} dtype={dtype} "
