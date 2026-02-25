@@ -10,7 +10,7 @@ from jax.tree_util import tree_map
 
 try:
     import torch
-    from flash_attn import flash_attn_func
+    from flash_attn_3.flash_attn_interface import flash_attn_func
     HAS_TORCH_FLASH = True
 except ImportError:
     HAS_TORCH_FLASH = False
@@ -46,7 +46,7 @@ def check(jax_out, torch_out, rtol=1e-5, atol=1e-5):
 
 
 @settings(deadline=None)
-@given(d=st.integers(min_value=1, max_value=128),
+@given(d=st.integers(min_value=1, max_value=128).filter(lambda d: d % 8 == 0),  # hopper requires d to be a multiple of 8
        h=st.integers(min_value=1, max_value=8),
        seqlen=st.integers(min_value=1, max_value=16384),
        n=st.integers(min_value=1, max_value=2),
@@ -57,7 +57,7 @@ def test_fwd(n, seqlen, h, d, dtype, is_causal):
     k = jax.random.normal(jax.random.PRNGKey(1), [n, seqlen, h, d], dtype=dtype)
     v = jax.random.normal(jax.random.PRNGKey(2), [n, seqlen, h, d], dtype=dtype)
 
-    jax_out = flash_mha(q, k, v, is_causal=is_causal)
+    jax_out = flash_mha(q, k, v, is_causal=is_causal, backend='fa3')
 
     with torch.no_grad():
         torch_out = flash_attn_func(jax_to_torch(q), jax_to_torch(k), jax_to_torch(v), causal=is_causal)
@@ -67,7 +67,7 @@ def test_fwd(n, seqlen, h, d, dtype, is_causal):
 
 @pytest.mark.parametrize("m", [1,2]) 
 @settings(deadline=None)
-@given(d=st.integers(min_value=1, max_value=128),
+@given(d=st.integers(min_value=1, max_value=128).filter(lambda d: d % 8 == 0),  # hopper requires d to be a multiple of 8
        h=st.integers(min_value=1, max_value=8),
        seqlen_q=st.integers(min_value=1, max_value=16384),
        seqlen_k=st.integers(min_value=1, max_value=16384),
@@ -82,7 +82,7 @@ def test_cross_fwd(n, seqlen_q, seqlen_k, h, d, m, dtype, is_causal):
     k = jax.random.normal(jax.random.PRNGKey(1), [n, seqlen_k, h, d], dtype=dtype)
     v = jax.random.normal(jax.random.PRNGKey(2), [n, seqlen_k, h, d], dtype=dtype)
 
-    jax_out = flash_mha(q, k, v, is_causal=is_causal)
+    jax_out = flash_mha(q, k, v, is_causal=is_causal, backend='fa3')
 
     with torch.no_grad():
         torch_out = flash_attn_func(jax_to_torch(q), jax_to_torch(k), jax_to_torch(v), causal=is_causal)
@@ -91,7 +91,7 @@ def test_cross_fwd(n, seqlen_q, seqlen_k, h, d, m, dtype, is_causal):
 
 
 @settings(deadline=None)
-@given(d=st.integers(min_value=1, max_value=128),
+@given(d=st.integers(min_value=1, max_value=128).filter(lambda d: d % 8 == 0),  # hopper requires d to be a multiple of 8
        h=st.integers(min_value=1, max_value=8),
        seqlen=st.integers(min_value=1, max_value=16384),
        n=st.integers(min_value=1, max_value=2),
@@ -104,7 +104,7 @@ def test_bwd(n, seqlen, h, d, dtype, is_causal):
 
     @jax.grad
     def jax_grads(qkv):
-        return flash_mha(*qkv, is_causal=is_causal).sum()
+        return flash_mha(*qkv, is_causal=is_causal, backend='fa3').sum()
     jax_dq, jax_dk, jax_dv = jax_grads((q, k, v))
 
     q_pt = jax_to_torch(q).requires_grad_(True)
@@ -120,7 +120,7 @@ def test_bwd(n, seqlen, h, d, dtype, is_causal):
 
 @pytest.mark.parametrize("m", [1,2])
 @settings(deadline=None)
-@given(d=st.integers(min_value=1, max_value=128),
+@given(d=st.integers(min_value=1, max_value=128).filter(lambda d: d % 8 == 0),  # hopper requires d to be a multiple of 8
        h=st.integers(min_value=1, max_value=8),
        seqlen_q=st.integers(min_value=1, max_value=16384),
        seqlen_k=st.integers(min_value=1, max_value=16384),
@@ -134,7 +134,7 @@ def test_cross_bwd(n, seqlen_q, seqlen_k, h, d, m, dtype, is_causal):
 
     @jax.grad
     def jax_grads(qkv):
-        return flash_mha(*qkv, is_causal=is_causal).sum()
+        return flash_mha(*qkv, is_causal=is_causal, backend='fa3').sum()
     jax_dq, jax_dk, jax_dv = jax_grads((q, k, v))
 
     q_pt = jax_to_torch(q).requires_grad_(True)
@@ -150,11 +150,10 @@ def test_cross_bwd(n, seqlen_q, seqlen_k, h, d, m, dtype, is_causal):
 
 if __name__ == "__main__":
     test_fwd.__wrapped_target(
-         # The test sometimes passed when commented parts were varied together.
-         d=1,
-         h=1,  # or any other generated value
-         seqlen=257,
-         n=1,  # or any other generated value
-         is_causal=False,  # or any other generated value
-         dtype=jax.numpy.float16,  # or any other generated value
+           d=8,
+           h=1,
+           seqlen=769,
+           n=1,
+           is_causal=False,
+           dtype=jax.numpy.float16,
     )

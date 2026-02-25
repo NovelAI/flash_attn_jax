@@ -19,7 +19,6 @@ from jax.experimental.custom_partitioning import (
     custom_partitioning,
 )
 from flash_attn_jax.fa3_util import (
-    get_num_splits_fa3,
     calculate_scheduler_metadata_size,
 )
 
@@ -159,23 +158,13 @@ def _flash_mha_fwd_lowering_fa3(q, k, v, *,
     # Calculate is_local from window_size parameters
     is_local = (window_size_left >= 0 or window_size_right >= 0) # and not is_causal
 
-    # Calculate num_splits using SM90 (H100) heuristic
-    num_splits = get_num_splits_fa3(
-        batch_size=n,
-        seqlen_q=lq,
-        seqlen_k=lk,
-        num_heads=hq,
-        num_heads_k=hk,
-        head_dim=d,
-        head_dim_v=d,  # Currently same as head_dim
-        is_causal=is_causal,
-        is_local=is_local,
-        window_size_left=window_size_left,
-        window_size_right=window_size_right,
-        dtype=dtype,
-        num_sm=114,  # H100 SXM5 default
-        max_splits=128,
-    )
+    # Match PyTorch flash_attn_func default: num_splits=1 (no splitting).
+    # The split heuristic is only used by flash_attn_with_kvcache (num_splits=0).
+    # We pass num_splits=0 to C++ to let it auto-detect via get_num_splits(),
+    # but for buffer allocation we need to know the value at trace time.
+    # Since C++ will compute num_splits=1 for the standard fwd path when we
+    # pass num_splits=1, we just use 1 here.
+    num_splits = 1
 
     # Calculate scheduler_metadata size
     metadata_size = calculate_scheduler_metadata_size(
@@ -186,10 +175,22 @@ def _flash_mha_fwd_lowering_fa3(q, k, v, *,
         arch=90,  # SM90 (Hopper)
     )
 
-    # print('Computing num_splits and metadata_size for configuration:')
-    # print(f'batch_size={n}, seqlen_q={lq}, seqlen_k={lk}, num_heads={hq}, num_heads_k={hk}, head_dim={d}, is_causal={is_causal}, is_local={is_local}, window_size_left={window_size_left}, window_size_right={window_size_right}, dtype={dtype}, num_sm=114, max_splits=128')
-    # print(f'batch_size={n}, num_splits={num_splits}, is_causal={is_causal}, is_local={is_local}, arch=90')
-    # print('num_splits:', num_splits, 'metadata_size:', metadata_size)
+    if os.environ.get("FLASH_ATTN_JAX_DEBUG", '0') == '1':
+        from flash_attn_jax.fa3_util import round_up_headdim, round_up_headdim_v, tile_size_fwd_sm90_py
+        d_rounded = round_up_headdim(d)
+        dv_rounded = round_up_headdim_v(d)
+        element_size = 1 if dtype == jnp.float8_e4m3fn else 2
+        kBlockM, kBlockN = tile_size_fwd_sm90_py(d_rounded, dv_rounded, is_causal, is_local, element_size)
+        num_n_blocks = (lk + kBlockN - 1) // kBlockN
+        qhead_per_khead = hq // hk
+        seqlen_q_packgqa = lq * qhead_per_khead
+        num_m_blocks = (seqlen_q_packgqa + kBlockM - 1) // kBlockM
+        total_mblocks = n * hk * num_m_blocks
+        print(f"[flash_attn_jax] FA3 fwd_lowering: n={n} lq={lq} lk={lk} hq={hq} hk={hk} d={d} dtype={dtype} "
+              f"d_rounded={d_rounded} dv_rounded={dv_rounded} is_causal={is_causal} is_local={is_local} "
+              f"kBlockM={kBlockM} kBlockN={kBlockN} num_m_blocks={num_m_blocks} num_n_blocks={num_n_blocks} "
+              f"total_mblocks={total_mblocks} num_splits={num_splits} metadata_size={metadata_size} "
+              f"window_size_left={window_size_left} window_size_right={window_size_right} softcap={softcap}")
 
     # Padding for head dimension alignment
     dpad = (8 - d % 8) % 8
