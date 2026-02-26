@@ -31,17 +31,21 @@ set(CMAKE_INSTALL_RPATH "$ORIGIN/nvidia/cuda_runtime/lib")
 # Make sure RPATH is used instead of RUNPATH
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE)
 
-if(EXISTS ${Python_ROOT_DIR}/bin/python)
+if(PYTHON_VENV AND EXISTS ${PYTHON_VENV}/bin/python)
+    # Convert to absolute path in case a relative path like .venv was given
+    get_filename_component(PYTHON_VENV "${PYTHON_VENV}" ABSOLUTE)
     execute_process(
-        COMMAND ${Python_ROOT_DIR}/bin/python -c "import sysconfig; print(sysconfig.get_path('purelib'))"
+        COMMAND ${PYTHON_VENV}/bin/python -c "import sysconfig; print(sysconfig.get_path('purelib'))"
         OUTPUT_VARIABLE PYTHON_SITE_PACKAGES
         OUTPUT_STRIP_TRAILING_WHITESPACE
     )
     message(STATUS "Python site-packages: ${PYTHON_SITE_PACKAGES}")
-    set(Python_EXECUTABLE ${Python_ROOT_DIR}/bin/python)
-    set(CMAKE_PREFIX_PATH 
+    set(Python_EXECUTABLE ${PYTHON_VENV}/bin/python)
+    # Tell FindPython to prefer the location we specified over highest version
+    set(Python_FIND_STRATEGY LOCATION)
+    set(CMAKE_PREFIX_PATH
         ${PYTHON_SITE_PACKAGES}
-        ${Python_ROOT_DIR})
+        ${PYTHON_VENV})
 endif()
 
 # == Find dependencies ==
