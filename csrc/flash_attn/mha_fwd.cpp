@@ -311,7 +311,7 @@ mha_varlen_fwd_impl(
     }
 
     Flash_fwd_params params;
-    set_params_fprop(params,
+    FFI_RET_CHECK(set_params_fprop(params,
                     q_dtype,
                      batch_size,
                      max_seqlen_q, max_seqlen_k,
@@ -328,7 +328,7 @@ mha_varlen_fwd_impl(
                      softmax_scale,
                      window_size_left,
                      window_size_right,
-                     seqlenq_ngroups_swapped);
+                     seqlenq_ngroups_swapped));
     params.unpadded_lse = false;
     params.total_q = total_q;
 

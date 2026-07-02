@@ -866,7 +866,7 @@ mha_fwd_ffi_impl(
         // If seqlen_k == 0, then we have an empty tensor. We need to set the output to 0.
         // This may seem cursed, but that's because it is. 0xFEFEFEFE is approximately -1.69e+38, which is close enough to -inf.
         FFI_CUDA_CHECK(cudaMemsetAsync(out->untyped_data(), 0, out->size_bytes(), stream));
-        FFI_CUDA_CHECK(cudaMemsetAsync(out->untyped_data(), 0xFE, out->size_bytes(), stream));
+        FFI_CUDA_CHECK(cudaMemsetAsync(softmax_lse->untyped_data(), 0xFE, softmax_lse->size_bytes(), stream));
     }
 
     // return {out, softmax_lse};
