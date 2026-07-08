@@ -1177,7 +1177,10 @@ inline __device__ void combine_attn_seqk_parallel(const Params &params) {
                 gLSE_unpadded(lse_offset) = lse_logsum;
             }
         } else {
-            gLSE(tidx / kRowsPerLoadTranspose) = lse_logsum;
+            const index_t lse_offset = row_offset_lse + tidx / kRowsPerLoadTranspose;
+            if (lse_offset < lse_size) {
+                gLSE(tidx / kRowsPerLoadTranspose) = lse_logsum;
+            }
         }
     }
     // Store the scales exp(lse - lse_logsum) in shared memory.
