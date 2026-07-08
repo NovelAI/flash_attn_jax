@@ -177,8 +177,22 @@ def _flash_mha_varlen_fwd_hlo_lowering_fa3(
     if softmax_scale is None:
         softmax_scale = 1.0 / math.sqrt(d)
 
-    # Calculate is_local from window_size parameters
-    is_local = (window_size_left >= 0 or window_size_right >= 0)
+    # Match C++ window size adjustments (mha_fwd_ffi.cpp:499-508)
+    # These affect is_causal/is_local which determine metadata_size
+    if window_size_left >= max_seqlen_k - 1:
+        window_size_left = -1
+    if window_size_right >= max_seqlen_q - 1:
+        window_size_right = -1
+    # The C++ seqlen_q==1 branch has a paged-KV exception; this path never
+    # passes a page_table, so it collapses to unconditional
+    if max_seqlen_q == 1 and window_size_left == -1 and window_size_right == -1:
+        is_causal = False
+    if is_causal:
+        window_size_right = 0
+
+    # Final flags derived from adjusted windows (flash_ffi_common.cpp:153-154)
+    is_causal = window_size_left < 0 and window_size_right == 0
+    is_local = (window_size_left >= 0 or window_size_right >= 0) and not is_causal
 
     # Calculate num_splits using varlen-specific heuristics
     # For varlen with dynamic split, assume worst case: batch=1 long sequence

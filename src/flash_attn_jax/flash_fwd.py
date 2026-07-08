@@ -155,8 +155,22 @@ def _flash_mha_fwd_lowering_fa3(q, k, v, *,
     if softmax_scale is None:
         softmax_scale = 1.0 / math.sqrt(d)
 
-    # Calculate is_local from window_size parameters
-    is_local = (window_size_left >= 0 or window_size_right >= 0) # and not is_causal
+    # Match C++ window size adjustments (mha_fwd_ffi.cpp:499-508)
+    # These affect is_causal/is_local which determine metadata_size
+    if window_size_left >= lk - 1:
+        window_size_left = -1
+    if window_size_right >= lq - 1:
+        window_size_right = -1
+    # The C++ seqlen_q==1 branch has a paged-KV exception; this path never
+    # passes a page_table, so it collapses to unconditional
+    if lq == 1 and window_size_left == -1 and window_size_right == -1:
+        is_causal = False
+    if is_causal:
+        window_size_right = 0
+
+    # Final flags derived from adjusted windows (flash_ffi_common.cpp:153-154)
+    is_causal = window_size_left < 0 and window_size_right == 0
+    is_local = (window_size_left >= 0 or window_size_right >= 0) and not is_causal
 
     # Match PyTorch flash_attn_func default: num_splits=1 (no splitting).
     # The split heuristic is only used by flash_attn_with_kvcache (num_splits=0).
