@@ -43,3 +43,8 @@ compile_commands.json
 /csrc/hopper/pytorch-backup-files-ignore-me
 /doc
 .env
+# Local scratch
+/play.py
+/play.ipynb
+/verify_window_fix.py
+*.git-ignore-me/
