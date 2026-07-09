@@ -10,11 +10,17 @@
 
 #include "hopper/gpu/flash.h"
 #include "flash_ffi_common.h"
-#include "xla/ffi/api/ffi.h"
 
-namespace ffi = xla::ffi;
+bool flash_debug() {
+    static int val = -1;
+    if (val < 0) {
+        const char* env = std::getenv("FLASH_ATTN_JAX_DEBUG");
+        val = (env && env[0] == '1') ? 1 : 0;
+    }
+    return val;
+}
 
-ffi::Error set_params_fprop_ffi(Flash_fwd_params &params,
+void set_params_fprop_ffi(Flash_fwd_params &params,
                         cudaStream_t stream,
                         int device_ordinal,
                       // sizes
@@ -28,10 +34,10 @@ ffi::Error set_params_fprop_ffi(Flash_fwd_params &params,
                       const size_t d,
                       const size_t d_rounded,
                       // device pointers
-                      const ffi::AnyBuffer& q,
-                      const ffi::AnyBuffer& k,
-                      const ffi::AnyBuffer& v,
-                      ffi::AnyBuffer& out,
+                      const ffi::TensorArg& q,
+                      const ffi::TensorArg& k,
+                      const ffi::TensorArg& v,
+                      ffi::TensorArg& out,
                       void *cu_seqlens_q_d,
                       void *cu_seqlens_k_d,
                       void *seqused_q,
@@ -58,7 +64,7 @@ ffi::Error set_params_fprop_ffi(Flash_fwd_params &params,
 
     // Helper to compute row-major strides for a buffer
     // Returns strides in elements (not bytes) as a vector
-    auto compute_strides = [](const ffi::AnyBuffer& buf) -> std::vector<int64_t> {
+    auto compute_strides = [](const ffi::TensorArg& buf) -> std::vector<int64_t> {
         int ndim = buf.dimensions().size();
         std::vector<int64_t> strides(ndim);
         int64_t s = 1;
@@ -78,11 +84,9 @@ ffi::Error set_params_fprop_ffi(Flash_fwd_params &params,
     int v_ndim = v.dimensions().size();
     int out_ndim = out.dimensions().size();
 
-    if ((q_ndim != 3 && q_ndim != 4) || (k_ndim != 3 && k_ndim != 4) ||
-        (v_ndim != 3 && v_ndim != 4) || (out_ndim != 3 && out_ndim != 4)) {
-      return ffi::Error(ffi::ErrorCode::kInvalidArgument,
-                        "All input and output buffers must be rank 3 or 4 tensors");
-    }
+    FFI_CHECK((q_ndim == 3 || q_ndim == 4) && (k_ndim == 3 || k_ndim == 4) &&
+              (v_ndim == 3 || v_ndim == 4) && (out_ndim == 3 || out_ndim == 4))
+        << "All input and output buffers must be rank 3 or 4 tensors";
 
     auto q_strides = compute_strides(q);
     auto k_strides = compute_strides(k);
@@ -187,8 +191,6 @@ ffi::Error set_params_fprop_ffi(Flash_fwd_params &params,
     #endif
 
     #ifdef FLASHATTENTION_DISABLE_LOCAL
-        TORCH_CHECK(!params.is_local, "This flash attention build does not support local attention.");
+        FFI_CHECK(!params.is_local) << "This flash attention build does not support local attention.";
     #endif
-
-    return ffi::Error();  // Success
 }

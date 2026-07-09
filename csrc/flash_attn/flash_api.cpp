@@ -5,139 +5,73 @@
 #include <stddef.h>
 #include <cutlass/numeric_types.h>
 #include <cuda_runtime_api.h>
-#include <nanobind/nanobind.h>
+
+#include <tvm/ffi/container/tensor.h>
+#include <tvm/ffi/function.h>
 
 #include "check.h"
-
 #include "mha_fwd.h"
 #include "mha_bwd.h"
-#include "xla/ffi/api/c_api.h"
-#include "xla/ffi/api/ffi.h"
-
-namespace ffi = xla::ffi;
 
 namespace {
 
-namespace nb = nanobind;
+namespace tffi = tvm::ffi;
 
-template <typename T>
-nb::capsule EncapsulateFfiCall(T *fn) {
-  static_assert(std::is_invocable_r_v<XLA_FFI_Error *, T, XLA_FFI_CallFrame *>,
-                "Encapsulated function must be an XLA FFI handler");
-  return nb::capsule(reinterpret_cast<void *>(fn));
+// tvm-ffi entry points. Parameter order is args, rets, attrs — it must match the
+// arg_spec used at registration time in flash_hlo.py. TensorView converts
+// implicitly to the ffi::TensorArg shim the handlers are written against.
+
+void Fa2Fwd(
+    tffi::TensorView q, tffi::TensorView k, tffi::TensorView v,
+    tffi::TensorView o, tffi::TensorView lse, tffi::TensorView oaccum, tffi::TensorView lseaccum,
+    double softmax_scale, bool is_causal,
+    int64_t window_size_left, int64_t window_size_right) {
+  mha_fwd_impl(q, k, v, o, lse, oaccum, lseaccum,
+               softmax_scale, is_causal, window_size_left, window_size_right);
 }
 
-XLA_FFI_DEFINE_HANDLER(
-	mha_fwd, mha_fwd_impl,
-	ffi::Ffi::Bind()
-        .Ctx<ffi::PlatformStream<cudaStream_t>>()
-		.Ctx<ffi::DeviceOrdinal>()
-		.Arg<ffi::AnyBuffer>()
-		.Arg<ffi::AnyBuffer>()
-		.Arg<ffi::AnyBuffer>()
-		.Ret<ffi::AnyBuffer>()
-		.Ret<ffi::Buffer<ffi::F32>>()
-		.Ret<ffi::Buffer<ffi::F32>>()
-		.Ret<ffi::Buffer<ffi::F32>>()
-		.Attr<double>("softmax_scale")
-		.Attr<bool>("is_causal")
-		.Attr<int64_t>("window_size_left")
-		.Attr<int64_t>("window_size_right")
-);
-
-XLA_FFI_DEFINE_HANDLER(
-	mha_bwd, mha_bwd_impl,
-	ffi::Ffi::Bind()
-		.Ctx<ffi::PlatformStream<cudaStream_t>>()
-		.Ctx<ffi::DeviceOrdinal>()
-		.Arg<ffi::AnyBuffer>() // dout
-		.Arg<ffi::AnyBuffer>() // q
-		.Arg<ffi::AnyBuffer>() // k
-		.Arg<ffi::AnyBuffer>() // v
-		.Arg<ffi::AnyBuffer>() // o
-		.Arg<ffi::Buffer<ffi::F32>>() // lse
-		.Ret<ffi::AnyBuffer>() // dq
-		.Ret<ffi::AnyBuffer>() // dk
-		.Ret<ffi::AnyBuffer>() // dv
-		.Ret<ffi::Buffer<ffi::F32>>() // softmax_d
-		.Ret<ffi::Buffer<ffi::F32>>() // dq_accum
-		.Attr<double>("softmax_scale")
-		.Attr<bool>("is_causal")
-		.Attr<int64_t>("window_size_left")
-		.Attr<int64_t>("window_size_right")
-		.Attr<bool>("deterministic")
-);
-
-XLA_FFI_DEFINE_HANDLER(
-	mha_varlen_fwd, mha_varlen_fwd_impl,
-	ffi::Ffi::Bind()
-		.Ctx<ffi::PlatformStream<cudaStream_t>>()
-		.Ctx<ffi::DeviceOrdinal>()
-		.Arg<ffi::AnyBuffer>() // q
-		.Arg<ffi::AnyBuffer>() // k
-		.Arg<ffi::AnyBuffer>() // v
-		.Arg<ffi::Buffer<ffi::S32>>() // cu_seqlens_q
-		.Arg<ffi::Buffer<ffi::S32>>() // cu_seqlens_k
-		.OptionalArg<ffi::Buffer<ffi::S32>>() // seqused_k
-		.Ret<ffi::AnyBuffer>() // o
-		.Ret<ffi::Buffer<ffi::F32>>() // lse
-		.Ret<ffi::Buffer<ffi::F32>>()
-		.Ret<ffi::Buffer<ffi::F32>>()
-		.Attr<int>("max_seqlen_q")
-		.Attr<int>("max_seqlen_k")
-		.Attr<double>("softmax_scale")
-		.Attr<bool>("zero_tensors")
-		.Attr<bool>("is_causal")
-		.Attr<int64_t>("window_size_left")
-		.Attr<int64_t>("window_size_right")
-);
-
-XLA_FFI_DEFINE_HANDLER(
-	mha_varlen_bwd, mha_varlen_bwd_impl,
-	ffi::Ffi::Bind()
-		.Ctx<ffi::PlatformStream<cudaStream_t>>()
-		.Ctx<ffi::DeviceOrdinal>()
-		.Arg<ffi::AnyBuffer>() // dout
-		.Arg<ffi::AnyBuffer>() // q
-		.Arg<ffi::AnyBuffer>() // k
-		.Arg<ffi::AnyBuffer>() // v
-		.Arg<ffi::AnyBuffer>() // o
-		.Arg<ffi::Buffer<ffi::F32>>() // lse
-		.Arg<ffi::Buffer<ffi::S32>>() // cu_seqlens_q
-		.Arg<ffi::Buffer<ffi::S32>>() // cu_seqlens_k
-		.Ret<ffi::AnyBuffer>() // dq
-		.Ret<ffi::AnyBuffer>() // dk
-		.Ret<ffi::AnyBuffer>() // dv
-		.Ret<ffi::Buffer<ffi::F32>>() // softmax_d
-		.Ret<ffi::Buffer<ffi::F32>>() // dq_accum
-		.Attr<int64_t>("max_seqlen_q")
-		.Attr<int64_t>("max_seqlen_k")
-		.Attr<float>("softmax_scale")
-		.Attr<bool>("zero_tensors")
-		.Attr<bool>("is_causal")
-		.Attr<int64_t>("window_size_left")
-		.Attr<int64_t>("window_size_right")
-		.Attr<bool>("deterministic")
-);
-
-nb::dict FFIRegistrations() {
-  nb::dict dict;
-  dict["flash_mha_fwd"] = EncapsulateFfiCall(mha_fwd);
-  dict["flash_mha_bwd"] = EncapsulateFfiCall(mha_bwd);
-  dict["flash_mha_varlen_fwd"] = EncapsulateFfiCall(mha_varlen_fwd);
-  dict["flash_mha_varlen_bwd"] = EncapsulateFfiCall(mha_varlen_bwd);
-  return dict;
+void Fa2Bwd(
+    tffi::TensorView dout, tffi::TensorView q, tffi::TensorView k, tffi::TensorView v,
+    tffi::TensorView o, tffi::TensorView lse,
+    tffi::TensorView dq, tffi::TensorView dk, tffi::TensorView dv,
+    tffi::TensorView softmax_d, tffi::TensorView dq_accum,
+    double softmax_scale, bool is_causal,
+    int64_t window_size_left, int64_t window_size_right, bool deterministic) {
+  mha_bwd_impl(dout, q, k, v, o, lse, dq, dk, dv, softmax_d, dq_accum,
+               softmax_scale, is_causal, window_size_left, window_size_right, deterministic);
 }
 
-
-NB_MODULE(flash_api, m) {
-    m.doc() = "FlashAttention";
-	m.def("get_ffi_registrations", &FFIRegistrations);
-
-    // m.def("varlen_fwd", &mha_varlen_fwd, "Forward pass (variable length)");
-    // m.def("bwd", &mha_bwd, "Backward pass");
-    // m.def("varlen_bwd", &mha_varlen_bwd, "Backward pass (variable length)");
-    // m.def("fwd_kvcache", &mha_fwd_kvcache, "Forward pass, with KV-cache");
+void Fa2VarlenFwd(
+    tffi::TensorView q, tffi::TensorView k, tffi::TensorView v,
+    tffi::TensorView cu_seqlens_q, tffi::TensorView cu_seqlens_k, tffi::TensorView seqused_k,
+    tffi::TensorView out, tffi::TensorView lse, tffi::TensorView oaccum, tffi::TensorView lseaccum,
+    int64_t max_seqlen_q, int64_t max_seqlen_k, double softmax_scale,
+    bool zero_tensors, bool is_causal,
+    int64_t window_size_left, int64_t window_size_right) {
+  mha_varlen_fwd_impl(q, k, v, cu_seqlens_q, cu_seqlens_k, seqused_k,
+                      out, lse, oaccum, lseaccum,
+                      max_seqlen_q, max_seqlen_k, softmax_scale,
+                      zero_tensors, is_causal, window_size_left, window_size_right);
 }
 
-} // namespace
+void Fa2VarlenBwd(
+    tffi::TensorView dout, tffi::TensorView q, tffi::TensorView k, tffi::TensorView v,
+    tffi::TensorView o, tffi::TensorView lse,
+    tffi::TensorView cu_seqlens_q, tffi::TensorView cu_seqlens_k,
+    tffi::TensorView dq, tffi::TensorView dk, tffi::TensorView dv,
+    tffi::TensorView softmax_d, tffi::TensorView dq_accum,
+    int64_t max_seqlen_q, int64_t max_seqlen_k, double softmax_scale,
+    bool zero_tensors, bool is_causal,
+    int64_t window_size_left, int64_t window_size_right, bool deterministic) {
+  mha_varlen_bwd_impl(dout, q, k, v, o, lse, cu_seqlens_q, cu_seqlens_k,
+                      dq, dk, dv, softmax_d, dq_accum,
+                      max_seqlen_q, max_seqlen_k, softmax_scale,
+                      zero_tensors, is_causal, window_size_left, window_size_right, deterministic);
+}
+
+}  // namespace
+
+TVM_FFI_DLL_EXPORT_TYPED_FUNC(fa2_fwd, Fa2Fwd);
+TVM_FFI_DLL_EXPORT_TYPED_FUNC(fa2_bwd, Fa2Bwd);
+TVM_FFI_DLL_EXPORT_TYPED_FUNC(fa2_varlen_fwd, Fa2VarlenFwd);
+TVM_FFI_DLL_EXPORT_TYPED_FUNC(fa2_varlen_bwd, Fa2VarlenBwd);

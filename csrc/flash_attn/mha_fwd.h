@@ -5,43 +5,39 @@
 #include <cutlass/numeric_types.h>
 #include <stddef.h>
 
-#include "xla/ffi/api/ffi.h"
+#include "check.h"
 
-namespace ffi = xla::ffi;
-
-ffi::Error mha_fwd_impl(
-    cudaStream_t stream, 
-    int32_t device,
-    ffi::AnyBuffer q,
-    ffi::AnyBuffer k,
-    ffi::AnyBuffer v,
-    ffi::Result<ffi::AnyBuffer> o,
-    ffi::ResultBuffer<ffi::F32> lse,
-    ffi::ResultBuffer<ffi::F32> oaccum,
-    ffi::ResultBuffer<ffi::F32> lseaccum,
+// tvm-ffi calling convention: args, rets, attrs (matches the arg_spec in flash_hlo.py).
+// Missing optional tensors are 0-d tensors.
+void mha_fwd_impl(
+    ffi::TensorArg q,
+    ffi::TensorArg k,
+    ffi::TensorArg v,
+    ffi::TensorArg o,
+    ffi::TensorArg lse,
+    ffi::TensorArg oaccum,
+    ffi::TensorArg lseaccum,
     double softmax_scale,
     bool is_causal,
     int64_t window_size_left,
     int64_t window_size_right);
 
-ffi::Error
+void
 mha_varlen_fwd_impl(
-    cudaStream_t stream,
-    int32_t device,
-    ffi::AnyBuffer q,  // total_q x num_heads x head_size, total_q := \sum_{i=0}^{b} s_i
-    ffi::AnyBuffer k,  // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
-    ffi::AnyBuffer v,  // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
-    ffi::Buffer<ffi::S32> cu_seqlens_q,  // b+1
-    ffi::Buffer<ffi::S32> cu_seqlens_k,  // b+1
-    std::optional<ffi::Buffer<ffi::S32>> seqused_k, // b. If given, only this many elements of each batch element's keys are used.
-    ffi::Result<ffi::AnyBuffer> out, // total_q x num_heads x head_size, total_k := \sum_{i=0}^{b} s_i
-    ffi::ResultBuffer<ffi::F32> lse, // total_q x num_heads
-    ffi::ResultBuffer<ffi::F32> oaccum,
-    ffi::ResultBuffer<ffi::F32> lseaccum,
-    int max_seqlen_q,
-    int max_seqlen_k,
-    float softmax_scale,
+    ffi::TensorArg q,  // total_q x num_heads x head_size, total_q := \sum_{i=0}^{b} s_i
+    ffi::TensorArg k,  // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
+    ffi::TensorArg v,  // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
+    ffi::TensorArg cu_seqlens_q,  // b+1
+    ffi::TensorArg cu_seqlens_k,  // b+1
+    ffi::TensorArg seqused_k, // b (0-d if absent). If given, only this many elements of each batch element's keys are used.
+    ffi::TensorArg out, // total_q x num_heads x head_size, total_k := \sum_{i=0}^{b} s_i
+    ffi::TensorArg lse, // batch_size x num_heads x max_seqlen_q
+    ffi::TensorArg oaccum,
+    ffi::TensorArg lseaccum,
+    int64_t max_seqlen_q,
+    int64_t max_seqlen_k,
+    double softmax_scale,
     bool zero_tensors,
     bool is_causal,
-    int window_size_left,
-    int window_size_right);
+    int64_t window_size_left,
+    int64_t window_size_right);

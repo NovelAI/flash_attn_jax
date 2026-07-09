@@ -10,12 +10,10 @@
 
 #include "flash_common.h"
 #include "mha_bwd.h"
-#include "xla/ffi/api/ffi.h"
 
-namespace ffi = xla::ffi;
 using namespace flash;
 
-ffi::Error set_params_dgrad(Flash_bwd_params &params,
+void set_params_dgrad(Flash_bwd_params &params,
 					  ffi::DataType element_type,
                       // sizes
                       const size_t b,
@@ -49,7 +47,7 @@ ffi::Error set_params_dgrad(Flash_bwd_params &params,
                       int window_size_right,
                       bool deterministic) {
 
-    FFI_RET_CHECK(set_params_fprop(params, element_type,
+    set_params_fprop(params, element_type,
                      b, seqlen_q, seqlen_k, seqlen_q_rounded, seqlen_k_rounded, h, h_k, d, d_rounded,
                      q_ptr, k_ptr, v_ptr, out_ptr,
                      cu_seqlens_q_d,
@@ -60,7 +58,7 @@ ffi::Error set_params_dgrad(Flash_bwd_params &params,
                      p_dropout,
                      softmax_scale,
                      window_size_left,
-                     window_size_right));
+                     window_size_right);
 
     // Set the pointers and strides.
     params.do_ptr = dout_ptr;
@@ -97,7 +95,6 @@ ffi::Error set_params_dgrad(Flash_bwd_params &params,
     params.dsoftmax_sum = dsoftmax_sum_d;
 
     params.deterministic = deterministic;
-    return ffi::Error();
 }
 
 void run_mha_bwd(Flash_bwd_params &params, cudaStream_t stream) {
@@ -110,21 +107,22 @@ void run_mha_bwd(Flash_bwd_params &params, cudaStream_t stream) {
     });
 }
 
-ffi::Error mha_bwd_impl(cudaStream_t stream,
-                        int32_t device,
-                        ffi::AnyBuffer dout, // batch_size x seqlen_q x num_heads x head_size_og
-                        ffi::AnyBuffer q,    // batch_size x seqlen_q x num_heads x head_size
-                        ffi::AnyBuffer k,    // batch_size x seqlen_k x num_heads_k x head_size
-                        ffi::AnyBuffer v,    // batch_size x seqlen_k x num_heads_k x head_size
-                        ffi::AnyBuffer o,    // batch_size x seqlen_q x num_heads x head_size
-                        ffi::Buffer<ffi::F32> lse, // b x h x seqlen_q
-                        ffi::Result<ffi::AnyBuffer> dq,    // batch_size x seqlen_q x num_heads x head_size
-                        ffi::Result<ffi::AnyBuffer> dk,    // batch_size x seqlen_k x num_heads_k x head_size
-                        ffi::Result<ffi::AnyBuffer> dv,    // batch_size x seqlen_k x num_heads_k x head_size
-                        ffi::ResultBuffer<ffi::F32> softmax_d,  // batch_size x num_heads x seqlen_q_rounded
-                        ffi::ResultBuffer<ffi::F32> dq_accum,   // batch_size x seqlen_q_rounded x num_heads x head_size_rounded
+void mha_bwd_impl(
+                        ffi::TensorArg dout, // batch_size x seqlen_q x num_heads x head_size_og
+                        ffi::TensorArg q,    // batch_size x seqlen_q x num_heads x head_size
+                        ffi::TensorArg k,    // batch_size x seqlen_k x num_heads_k x head_size
+                        ffi::TensorArg v,    // batch_size x seqlen_k x num_heads_k x head_size
+                        ffi::TensorArg o,    // batch_size x seqlen_q x num_heads x head_size
+                        ffi::TensorArg lse, // b x h x seqlen_q
+                        ffi::TensorArg dq,    // batch_size x seqlen_q x num_heads x head_size
+                        ffi::TensorArg dk,    // batch_size x seqlen_k x num_heads_k x head_size
+                        ffi::TensorArg dv,    // batch_size x seqlen_k x num_heads_k x head_size
+                        ffi::TensorArg softmax_d,  // batch_size x num_heads x seqlen_q_rounded
+                        ffi::TensorArg dq_accum,   // batch_size x seqlen_q_rounded x num_heads x head_size_rounded
                         double softmax_scale, bool is_causal,
                         int64_t window_size_left, int64_t window_size_right, bool deterministic) {
+    int device = q.device().device_id;
+    cudaStream_t stream = flash_ffi_get_stream(q.device());
 	int major, minor, sm_count;
     FFI_CUDA_CHECK(cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device));
 	FFI_CUDA_CHECK(cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, device));
@@ -138,7 +136,7 @@ ffi::Error mha_bwd_impl(cudaStream_t stream,
     FFI_CHECK(is_ampere_or_newer) << "FlashAttention only supports Ampere GPUs or newer.";
 
     auto q_dtype = q.element_type();
-    FFI_CHECK(q_dtype == ffi::BF16 || q_dtype == ffi::F16) << ffi::ErrorCode::kInvalidArgument
+    FFI_CHECK(q_dtype == ffi::BF16 || q_dtype == ffi::F16)
         << "FlashAttention only support fp16 and bf16 data type";
     if (q_dtype == ffi::BF16) {
         FFI_CHECK(is_ampere_or_newer) << "bfloat16 is only supported on Ampere GPUs or newer";
@@ -148,9 +146,9 @@ ffi::Error mha_bwd_impl(cudaStream_t stream,
     FFI_CHECK(v.element_type() == q_dtype) << "query and value must have the same dtype";
     FFI_CHECK(o.element_type() == q_dtype) << "query and out must have the same dtype";
     FFI_CHECK(dout.element_type() == q_dtype) << "query and dout must have the same dtype";
-    FFI_CHECK(dq->element_type() == q_dtype) << "dq must have the same dtype as q";
-    FFI_CHECK(dk->element_type() == q_dtype) << "dk must have the same dtype as q";
-    FFI_CHECK(dv->element_type() == q_dtype) << "dv must have the same dtype as q";
+    FFI_CHECK(dq.element_type() == q_dtype) << "dq must have the same dtype as q";
+    FFI_CHECK(dk.element_type() == q_dtype) << "dk must have the same dtype as q";
+    FFI_CHECK(dv.element_type() == q_dtype) << "dv must have the same dtype as q";
 
     const int batch_size = q.dimensions()[0];
     const int seqlen_q = q.dimensions()[1];
@@ -179,26 +177,26 @@ ffi::Error mha_bwd_impl(cudaStream_t stream,
     bool loop = true;
 
     // Use XLA-provided buffers instead of scratch allocation
-    void* softmax_d_ptr = softmax_d->untyped_data();
+    void* softmax_d_ptr = softmax_d.untyped_data();
     void* dq_accum_ptr = nullptr;
     void* dk_accum = nullptr;
 	void* dv_accum = nullptr;
     
     if (loop) {
-        dq_accum_ptr = dq_accum->untyped_data();
+        dq_accum_ptr = dq_accum.untyped_data();
         // Zero the dq_accum buffer - entire buffer needs to be zeroed for both deterministic and non-deterministic
-        FFI_CUDA_CHECK(cudaMemsetAsync(dq_accum_ptr, 0, dq_accum->size_bytes(), stream));
+        FFI_CUDA_CHECK(cudaMemsetAsync(dq_accum_ptr, 0, dq_accum.size_bytes(), stream));
     }
 
 
     // For MQA, dk and dv are expanded to the same n_heads as dq (handled in xla).
     // After returning the result, it gets reduced to the original size by summing, so we don't need to do anything here.
-	void* dk_expanded = dk->untyped_data();
-	void* dv_expanded = dv->untyped_data();
+	void* dk_expanded = dk.untyped_data();
+	void* dv_expanded = dv.untyped_data();
 
     Flash_bwd_params params;
 
-    FFI_RET_CHECK(set_params_dgrad(params,
+    set_params_dgrad(params,
 					 q_dtype,
                      batch_size,
                      seqlen_q, seqlen_k,
@@ -206,7 +204,7 @@ ffi::Error mha_bwd_impl(cudaStream_t stream,
                      num_heads, num_heads_k,
                      head_size, head_size_rounded,
                      q.untyped_data(), k.untyped_data(), v.untyped_data(), o.untyped_data(),
-                     dout.untyped_data(), dq->untyped_data(), dk_expanded, dv_expanded,
+                     dout.untyped_data(), dq.untyped_data(), dk_expanded, dv_expanded,
                      nullptr,
                      nullptr,
                      loop ? dq_accum_ptr : nullptr,
@@ -220,7 +218,7 @@ ffi::Error mha_bwd_impl(cudaStream_t stream,
                      softmax_scale,
                      window_size_left,
                      window_size_right,
-                     deterministic));
+                     deterministic);
     params.unpadded_lse = false;
     params.total_q = 0;
     params.dq_accum_split_stride = !deterministic ? 0 : (batch_size * seqlen_q_rounded * num_heads * head_size_rounded);
@@ -232,39 +230,37 @@ ffi::Error mha_bwd_impl(cudaStream_t stream,
     //     FFI_CUDA_CHECK(cudaStreamSynchronize(stream));
     // } else {
     //     // If seqlen_q == 0, then we have an empty tensor. We need to set the output to 0.
-    //     FFI_CUDA_CHECK(cudaMemsetAsync(dq->untyped_data(), 0, dq->size_bytes(), stream));
-    //     FFI_CUDA_CHECK(cudaMemsetAsync(dk->untyped_data(), 0, dk->size_bytes(), stream));
-    //     FFI_CUDA_CHECK(cudaMemsetAsync(dv->untyped_data(), 0, dv->size_bytes(), stream));
+    //     FFI_CUDA_CHECK(cudaMemsetAsync(dq.untyped_data(), 0, dq.size_bytes(), stream));
+    //     FFI_CUDA_CHECK(cudaMemsetAsync(dk.untyped_data(), 0, dk.size_bytes(), stream));
+    //     FFI_CUDA_CHECK(cudaMemsetAsync(dv.untyped_data(), 0, dv.size_bytes(), stream));
     // }
-
-    return ffi::Error();
 }
 
-ffi::Error
+void
 mha_varlen_bwd_impl(
-    cudaStream_t stream,
-    int32_t device,
-    ffi::AnyBuffer dout,  // total_q x num_heads, x head_size
-    ffi::AnyBuffer q,     // total_q x num_heads x head_size, total_q := \sum_{i=0}^{b} s_i
-    ffi::AnyBuffer k,     // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
-    ffi::AnyBuffer v,     // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
-    ffi::AnyBuffer o,     // total_q x num_heads x head_size,
-    ffi::Buffer<ffi::F32> lse, // b x h x s   softmax logsumexp
-    ffi::Buffer<ffi::S32> cu_seqlens_q,  // b+1
-    ffi::Buffer<ffi::S32> cu_seqlens_k,  // b+1
-    ffi::Result<ffi::AnyBuffer> dq,   // total_q x num_heads x head_size, total_q := \sum_{i=0}^{b} s_i
-    ffi::Result<ffi::AnyBuffer> dk,   // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
-    ffi::Result<ffi::AnyBuffer> dv,   // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
-    ffi::ResultBuffer<ffi::F32> softmax_d,  // batch_size x num_heads x seqlen_q_rounded
-    ffi::ResultBuffer<ffi::F32> dq_accum,   // (total_q + 128 * batch_size) x num_heads x head_size_rounded
+    ffi::TensorArg dout,  // total_q x num_heads, x head_size
+    ffi::TensorArg q,     // total_q x num_heads x head_size, total_q := \sum_{i=0}^{b} s_i
+    ffi::TensorArg k,     // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
+    ffi::TensorArg v,     // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
+    ffi::TensorArg o,     // total_q x num_heads x head_size,
+    ffi::TensorArg lse, // b x h x s   softmax logsumexp
+    ffi::TensorArg cu_seqlens_q,  // b+1
+    ffi::TensorArg cu_seqlens_k,  // b+1
+    ffi::TensorArg dq,   // total_q x num_heads x head_size, total_q := \sum_{i=0}^{b} s_i
+    ffi::TensorArg dk,   // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
+    ffi::TensorArg dv,   // total_k x num_heads_k x head_size, total_k := \sum_{i=0}^{b} s_i
+    ffi::TensorArg softmax_d,  // batch_size x num_heads x seqlen_q_rounded
+    ffi::TensorArg dq_accum,   // (total_q + 128 * batch_size) x num_heads x head_size_rounded
     int64_t max_seqlen_q,
     int64_t max_seqlen_k,          // max sequence length to choose the kernel
-    float softmax_scale,
+    double softmax_scale,
     bool zero_tensors,
     bool is_causal,
     int64_t window_size_left,
     int64_t window_size_right, 
     bool deterministic) {
+    int device = q.device().device_id;
+    cudaStream_t stream = flash_ffi_get_stream(q.device());
 
     if (is_causal) { window_size_right = 0; }
 	int major, minor, sm_count;
@@ -280,18 +276,18 @@ mha_varlen_bwd_impl(
     bool is_dropout = false;
 
     auto q_dtype = q.element_type();
-    FFI_CHECK(q_dtype == ffi::BF16 || q_dtype == ffi::F16) << ffi::ErrorCode::kInvalidArgument
+    FFI_CHECK(q_dtype == ffi::BF16 || q_dtype == ffi::F16)
         << "FlashAttention only support fp16 and bf16 data type";
     if (q_dtype == ffi::BF16) {
         FFI_CHECK(is_ampere_or_newer) << "bfloat16 is only supported on Ampere GPUs or newer";
     }
-    FFI_CHECK(k.element_type() == q_dtype) << ffi::ErrorCode::kInvalidArgument << "query and key must have the same dtype";
-    FFI_CHECK(v.element_type() == q_dtype) << ffi::ErrorCode::kInvalidArgument << "query and value must have the same dtype";
-    FFI_CHECK(o.element_type() == q_dtype) << ffi::ErrorCode::kInvalidArgument << "query and out must have the same dtype";
-    FFI_CHECK(dout.element_type() == q_dtype) << ffi::ErrorCode::kInvalidArgument << "query and dout must have the same dtype";
-    FFI_CHECK(dq->element_type() == q_dtype) << ffi::ErrorCode::kInvalidArgument << "dq must have the same dtype as q";
-    FFI_CHECK(dk->element_type() == q_dtype) << ffi::ErrorCode::kInvalidArgument << "dk must have the same dtype as q";
-    FFI_CHECK(dv->element_type() == q_dtype) << ffi::ErrorCode::kInvalidArgument << "dv must have the same dtype as q";
+    FFI_CHECK(k.element_type() == q_dtype) << "query and key must have the same dtype";
+    FFI_CHECK(v.element_type() == q_dtype) << "query and value must have the same dtype";
+    FFI_CHECK(o.element_type() == q_dtype) << "query and out must have the same dtype";
+    FFI_CHECK(dout.element_type() == q_dtype) << "query and dout must have the same dtype";
+    FFI_CHECK(dq.element_type() == q_dtype) << "dq must have the same dtype as q";
+    FFI_CHECK(dk.element_type() == q_dtype) << "dk must have the same dtype as q";
+    FFI_CHECK(dv.element_type() == q_dtype) << "dv must have the same dtype as q";
 
     const auto sizes = q.dimensions();
 
@@ -336,7 +332,7 @@ mha_varlen_bwd_impl(
     // Cast to char to avoid compiler warning about narrowing
 
     // Use XLA-provided buffers instead of scratch allocation
-    void* softmax_d_ptr = softmax_d->untyped_data();
+    void* softmax_d_ptr = softmax_d.untyped_data();
     void* dq_accum_ptr = nullptr;
     int dq_accum_split_stride = 0;
     
@@ -349,9 +345,9 @@ mha_varlen_bwd_impl(
         // cu_seqlens[i + 1] * 128 * i - 1. This ensures that the i-th sequence and (i + 1)-th sequence will
         // be at least 128 apart. It's ok for us to do atomicAdds up to 128 rows beyond what we're normally
         // allowed to do. So we won't have to do any bound checking, and performance should stay the same.
-        dq_accum_ptr = dq_accum->untyped_data();
+        dq_accum_ptr = dq_accum.untyped_data();
         // Zero the dq_accum buffer - entire buffer needs to be zeroed for both deterministic and non-deterministic
-        FFI_CUDA_CHECK(cudaMemsetAsync(dq_accum_ptr, 0, dq_accum->size_bytes(), stream));
+        FFI_CUDA_CHECK(cudaMemsetAsync(dq_accum_ptr, 0, dq_accum.size_bytes(), stream));
         
         // Set split stride for deterministic mode
         if (deterministic) {
@@ -377,7 +373,7 @@ mha_varlen_bwd_impl(
 
     Flash_bwd_params params;
 
-    FFI_RET_CHECK(set_params_dgrad(params,
+    set_params_dgrad(params,
                         q_dtype,
                      batch_size,
                      max_seqlen_q, max_seqlen_k,
@@ -385,7 +381,7 @@ mha_varlen_bwd_impl(
                      num_heads, num_heads_k,
                      head_size, head_size_rounded,
                      q.untyped_data(), k.untyped_data(), v.untyped_data(), o.untyped_data(),
-                     dout.untyped_data(), dq->untyped_data(), dk->untyped_data(), dv->untyped_data(),
+                     dout.untyped_data(), dq.untyped_data(), dk.untyped_data(), dv.untyped_data(),
                      cu_seqlens_q.untyped_data(),
                      cu_seqlens_k.untyped_data(),
                      loop ? dq_accum_ptr : nullptr,
@@ -397,7 +393,7 @@ mha_varlen_bwd_impl(
                      softmax_scale,
                      window_size_left,
                      window_size_right,
-                     deterministic));
+                     deterministic);
     params.unpadded_lse = false;
     params.total_q = total_q;
     params.dq_accum_split_stride = dq_accum_split_stride;
@@ -420,6 +416,5 @@ mha_varlen_bwd_impl(
     //     dv = dv.index({"...", torch::indexing::Slice(torch::indexing::None, head_size_og)});
     // }
 
-    return ffi::Error(); // Success
     // return { dq, dk, dv, softmax_d };
 }

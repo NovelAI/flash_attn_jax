@@ -7,7 +7,6 @@
 #include "flash.h"
 #include "check.h"
 #include "flash_common.h"
-#include "xla/ffi/api/ffi.h"
 
 bool flash_debug() {
     static int val = -1;
@@ -18,10 +17,9 @@ bool flash_debug() {
     return val;
 }
 
-namespace ffi = xla::ffi;
 using namespace flash;
 
-ffi::Error set_params_fprop(Flash_fwd_params &params,
+void set_params_fprop(Flash_fwd_params &params,
 					  ffi::DataType element_type,
                       // sizes
                       const size_t b,
@@ -137,8 +135,6 @@ ffi::Error set_params_fprop(Flash_fwd_params &params,
     params.window_size_right = window_size_right;
 
     params.is_seqlens_k_cumulative = true;
-
-    return ffi::Error(); // Success
 }
 
 // Find the number of splits that maximizes the occupancy. For example, if we have
@@ -183,7 +179,7 @@ int num_splits_heuristic(int batch_nheads_mblocks, int num_SMs, int num_n_blocks
     return 1;
 }
 
-ffi::Error set_params_splitkv(Flash_fwd_params& params, const int batch_size,
+void set_params_splitkv(Flash_fwd_params& params, const int batch_size,
 						const int num_heads, const int head_size, const int max_seqlen_k, const int max_seqlen_q,
 						const int head_size_rounded, const float p_dropout,
 						const int num_splits, int multiProcessorCount, ffi::DataType dtype,
@@ -221,5 +217,4 @@ ffi::Error set_params_splitkv(Flash_fwd_params& params, const int batch_size,
         }
         FFI_CHECK(params.num_splits <= 128) << "num_splits > 128 not supported - " << params.num_splits;
     }
-    return ffi::Error();
 }

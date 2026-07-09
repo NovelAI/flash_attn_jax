@@ -7,48 +7,43 @@
 #include <cstdint>
 #include <cuda_runtime_api.h>
 
-#include "xla/ffi/api/ffi.h"
+#include "flash_ffi_common.h"
 
-namespace ffi = xla::ffi;
+// Multi-head attention forward pass, tvm-ffi calling convention.
+// Parameter order matches the jax-tvm-ffi arg_spec: outputs first, then inputs,
+// then scalar attributes. Missing optional tensors are 0-d tensors.
+void mha_fwd_ffi_impl(
+    // Outputs (pre-allocated by XLA):
+    ffi::TensorArg out,           // (b, s_q, h, dv) or (total_q, h, dv) if there is cu_seqlens_q
+    ffi::TensorArg softmax_lse,   // (b, h, s_q) or (h, total_q) if there is cu_seqlens_q
+    ffi::TensorArg out_accum,
+    ffi::TensorArg softmax_lse_accum,
+    ffi::TensorArg scheduler_metadata,
 
-// Forward declaration of mha_fwd_ffi_impl
-// Multi-head attention forward pass FFI implementation
-ffi::Error mha_fwd_ffi_impl(
-    cudaStream_t stream, int32_t device_ordinal,
-    ffi::AnyBuffer q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seqlens_q
-    ffi::AnyBuffer k,  // (b_k, s_k, h_k, d) or (total_k, h_k, d) if there is cu_seqlens_k or (num_pages, page_size, h_k, d) if there is page_table.
-    ffi::AnyBuffer v,  // (b_k, s_k, h_k, dv) or (total_k, h_k, dv) if there is cu_seqlens_k or (num_pages, page_size, h_k, dv) if there is page_table.
+    // Inputs:
+    ffi::TensorArg q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seqlens_q
+    ffi::TensorArg k,   // (b_k, s_k, h_k, d) or (total_k, h_k, d) if there is cu_seqlens_k or (num_pages, page_size, h_k, d) if there is page_table.
+    ffi::TensorArg v,   // (b_k, s_k, h_k, dv) or (total_k, h_k, dv) if there is cu_seqlens_k or (num_pages, page_size, h_k, dv) if there is page_table.
+    ffi::TensorArg k_new,  // (b, s_k_new, h_k, d) or (total_k_new, h_k, d) if there is cu_seqlens_k_new
+    ffi::TensorArg v_new,  // (b, s_k_new, h_k, dv) or (total_k_new, h_k, dv) if there is cu_seqlens_k_new
+    ffi::TensorArg q_v,    // (b, s_q, h, dv) or (total_q_new, h, dv) if there is cu_seqlens_q
+    ffi::TensorArg cu_seqlens_q,      // b+1, int32
+    ffi::TensorArg cu_seqlens_k,      // b+1, int32
+    ffi::TensorArg cu_seqlens_k_new,  // b+1, int32
+    ffi::TensorArg page_table,        // (b_k, max_num_pages_per_seq), int32
+    ffi::TensorArg kv_batch_idx,      // b, int32. indices to index into the KV cache
+    ffi::TensorArg leftpad_k,         // b, int32
+    ffi::TensorArg rotary_cos,        // seqlen_ro x (rotary_dim / 2)
+    ffi::TensorArg rotary_sin,        // seqlen_ro x (rotary_dim / 2)
+    ffi::TensorArg seqlens_rotary,    // b, int32
+    ffi::TensorArg q_descale,         // (b, h_k), not (b, h), f32
+    ffi::TensorArg k_descale,         // (b, h_k), f32
+    ffi::TensorArg v_descale,         // (b, h_k), f32
 
-    // Optional arrays:
-    ffi::AnyBuffer k_new,  // (b, s_k_new, h_k, d) or (total_k_new, h_k, d) if there is cu_seqlens_k_new
-    ffi::AnyBuffer v_new,  // (b, s_k_new, h_k, dv) or (total_k_new, h_k, dv) if there is cu_seqlens_k_new
-    ffi::AnyBuffer q_v,  // (b, s_q, h, dv) or (total_q_new, h, dv) if there is cu_seqlens_q
-    ffi::Buffer<ffi::S32> cu_seqlens_q,  // b+1
-    ffi::Buffer<ffi::S32> cu_seqlens_k,  // b+1
-    ffi::Buffer<ffi::S32> cu_seqlens_k_new,  // b+1
-    // no seqused.
-    // std::optional<at::Tensor> seqused_q_, // b. If given, only this many elements of each batch element's queries and outputs are used.
-    // std::optional<at::Tensor> seqused_k_, // b. If given, only this many elements of each batch element's keys are used.
-    ffi::Buffer<ffi::S32> page_table, // (b_k, max_num_pages_per_seq)
-    ffi::Buffer<ffi::S32> kv_batch_idx, // b. indices to index into the KV cache
-    ffi::Buffer<ffi::S32> leftpad_k, // b
-    ffi::AnyBuffer rotary_cos, // seqlen_ro x (rotary_dim / 2)
-    ffi::AnyBuffer rotary_sin, // seqlen_ro x (rotary_dim / 2)
-    ffi::Buffer<ffi::S32> seqlens_rotary, // b
-    ffi::Buffer<ffi::F32> q_descale,  // (b, h_k), not (b, h)
-    ffi::Buffer<ffi::F32> k_descale,  // (b, h_k)
-    ffi::Buffer<ffi::F32> v_descale,  // (b, h_k)
-
-    // Return arrays: out, softmax_lse, out_accum, softmax_lse_accum
-    ffi::Result<ffi::AnyBuffer> out, // (b, s_q, h, dv) or (total_q, h, dv) if there is cu_seqlens_q
-    ffi::ResultBuffer<ffi::F32> softmax_lse, // (b, h, s_q) or (h, total_q) if there is cu_seqlens_q
-    ffi::ResultBuffer<ffi::F32> out_accum,
-    ffi::ResultBuffer<ffi::F32> softmax_lse_accum,
-    ffi::ResultBuffer<ffi::S32> scheduler_metadata,  // (b + 1)
-
-    std::optional<int64_t> max_seqlen_q_,
-    std::optional<int64_t> max_seqlen_k_,
-    std::optional<double> softmax_scale_,
+    // Attributes:
+    int64_t max_seqlen_q,
+    int64_t max_seqlen_k,
+    double softmax_scale_,
     bool is_causal,
     int64_t window_size_left,
     int64_t window_size_right,
@@ -56,6 +51,6 @@ ffi::Error mha_fwd_ffi_impl(
     double softcap,
     bool is_rotary_interleaved,   // if true, rotary combines indices 0 & 1, else indices 0 & rotary_dim / 2
     int64_t num_splits,
-    std::optional<bool> pack_gqa_,
+    bool pack_gqa,
     int64_t sm_margin
     );

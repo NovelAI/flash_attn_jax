@@ -15,8 +15,9 @@ from flash_attn_jax.varlen import flash_mha_varlen
 from .ref_mha import ref_mha
 
 def test_import():
-    import flash_attn_jax_lib.flash_hopper_ffi
-    print(dir(flash_attn_jax_lib.flash_hopper_ffi))
+    from flash_attn_jax.flash_hlo import flash_hopper_ffi, has_fa3
+    assert has_fa3(), "FA3 tvm-ffi module not built"
+    assert flash_hopper_ffi.fa3_fwd is not None
 
 @settings(deadline=None)
 @given(d=st.integers(min_value=1, max_value=128).filter(lambda d: d % 8 == 0),  # hopper requires d to be a multiple of 8
