@@ -14,8 +14,10 @@
     "cmake.configureArgs": [
         "-DPYTHON_VENV=${workspaceFolder}/.venv",
         "-DNO_OPTIONS_FILE=1",
-        "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
+        "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+        "-DMAX_JOBS=14"
     ],
+    "cmake.generator": "Ninja",
     "[cpp]": {
         "editor.tabSize": 2,
         "editor.insertSpaces": true
