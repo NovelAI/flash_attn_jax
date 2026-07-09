@@ -2,6 +2,10 @@
 
 import os
 os.environ['XLA_CLIENT_MEM_FRACTION'] = '0.25'
+os.environ['XLA_PYTHON_CLIENT_ALLOCATOR'] = 'cuda_async'
+# os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+# os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0'
+# os.environ['TF_CPP_VMODULE'] = "gemm_algorithm_picker=5,gemm_fusion_autotuner=5,autotuner=5,autotuner_util=5,gpu_profiler=5,cublas=5,gpu_executable=3,stream_executor_address_allocator=5,matmul_utils=5"
 import pytest
 import sys
 import threading
