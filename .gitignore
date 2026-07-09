@@ -39,3 +39,7 @@ tup.config
 local
 compile_commands.json
 .hypothesis
+/flash-attention
+/csrc/hopper/pytorch-backup-files-ignore-me
+/doc
+.env
