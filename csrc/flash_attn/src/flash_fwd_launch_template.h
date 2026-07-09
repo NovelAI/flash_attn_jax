@@ -201,7 +201,7 @@ template<typename T, bool Is_causal>
 void run_mha_fwd_hdim96(Flash_fwd_params &params, cudaStream_t stream) {
     constexpr static int Headdim = 96;
     auto [cc_major, cc_minor] = get_compute_capability(get_current_device());
-    bool is_sm8x = cc_major == 8 && cc_minor > 0;
+    bool is_sm8x = (cc_major == 8 && cc_minor > 0) || cc_major == 12;  // reduced-smem archs: Ada, consumer Blackwell
     DROPOUT_SWITCH(params.p_dropout < 1.f, Is_dropout, [&] {
         // For sm86 or sm89, 64 x 64 is the fastest for causal (because it's square),
         if (is_sm8x) {
@@ -225,7 +225,7 @@ template<typename T, bool Is_causal>
 void run_mha_fwd_hdim128(Flash_fwd_params &params, cudaStream_t stream) {
     constexpr static int Headdim = 128;
     auto [cc_major, cc_minor] = get_compute_capability(get_current_device());
-    bool is_sm8x = cc_major == 8 && cc_minor > 0;
+    bool is_sm8x = (cc_major == 8 && cc_minor > 0) || cc_major == 12;  // reduced-smem archs: Ada, consumer Blackwell
     DROPOUT_SWITCH(params.p_dropout < 1.f, Is_dropout, [&] {
         if constexpr(!Is_dropout) {
             // For sm86 or sm89, 64 x 64 is the fastest for causal (because it's square),

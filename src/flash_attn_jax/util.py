@@ -18,6 +18,24 @@ def get_sm_count(device_idx: int = 0) -> int:
         raise RuntimeError(f"cudaDeviceGetAttribute failed with error {err}")
     return count.value
 
+@functools.cache
+def get_compute_capability(device_idx: int = 0) -> int:
+    """Query the compute capability of the given CUDA device as major*10+minor (e.g. 90 for H100).
+
+    Matches params.arch in the C++ FFI layer (flash_ffi_common.cpp)."""
+    import ctypes
+    # cudaDevAttrComputeCapabilityMajor = 75, cudaDevAttrComputeCapabilityMinor = 76
+    major = ctypes.c_int()
+    minor = ctypes.c_int()
+    libcudart = ctypes.CDLL("libcudart.so")
+    err = libcudart.cudaDeviceGetAttribute(ctypes.byref(major), 75, device_idx)
+    if err != 0:
+        raise RuntimeError(f"cudaDeviceGetAttribute failed with error {err}")
+    err = libcudart.cudaDeviceGetAttribute(ctypes.byref(minor), 76, device_idx)
+    if err != 0:
+        raise RuntimeError(f"cudaDeviceGetAttribute failed with error {err}")
+    return major.value * 10 + minor.value
+
 def ceildiv(a: int, b: int) -> int:
     return (a + b - 1) // b
 

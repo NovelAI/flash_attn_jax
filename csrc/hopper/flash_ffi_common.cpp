@@ -172,6 +172,20 @@ ffi::Error set_params_fprop_ffi(Flash_fwd_params &params,
     // params.arch = at::cuda::getCurrentDeviceProperties()->major * 10 + at::cuda::getCurrentDeviceProperties()->minor;
     // params.num_sm = at::cuda::getCurrentDeviceProperties()->multiProcessorCount - sm_margin;
 
+    // sm90 (wgmma) kernels run only on compute capability 9.0; all other supported
+    // archs (Ampere/Ada/consumer Blackwell) use the sm80-style kernels.
+    FFI_CHECK(params.arch == 80 || params.arch == 86 || params.arch == 89
+              || params.arch == 90 || params.arch == 120 || params.arch == 121)
+        << "FA3 does not support compute capability " << major << "." << minor;
+    #ifdef FLASHATTENTION_DISABLE_SM8x
+    FFI_CHECK(params.arch == 90)
+        << "This FA3 build only includes SM90 kernels; rebuild with 80/86/89/120 in FLASH_ATTN_CUDA_ARCHS to support compute capability " << major << "." << minor;
+    #endif
+    #ifdef FLASHATTENTION_DISABLE_SM90
+    FFI_CHECK(params.arch != 90)
+        << "This FA3 build does not include SM90 kernels; rebuild with 90a in FLASH_ATTN_CUDA_ARCHS";
+    #endif
+
     #ifdef FLASHATTENTION_DISABLE_LOCAL
         TORCH_CHECK(!params.is_local, "This flash attention build does not support local attention.");
     #endif

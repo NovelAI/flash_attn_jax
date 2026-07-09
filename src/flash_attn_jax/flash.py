@@ -6,6 +6,7 @@ import jax.numpy as jnp
 
 from .flash_bwd import flash_mha_bwd
 from .flash_fwd import flash_mha_fwd
+from .flash_hlo import has_fa3
 
 # ==== VJP Rule ====
 
@@ -64,6 +65,9 @@ def flash_mha(q, k, v, softmax_scale=None, is_causal=False, window_size=(-1,-1),
     """
     if backend is None:
         backend = os.environ.get("FLASH_ATTN_JAX_BACKEND", "fa2")
+    if backend == "fa3" and not has_fa3():
+        raise RuntimeError("FA3 backend requested but flash_hopper_ffi was not built; "
+                           "rebuild with an FA3-capable arch (90a and/or 80/86/89/120/121) in FLASH_ATTN_CUDA_ARCHS")
     [nq, sq, hq, dq] = q.shape
     [nk, sk, hk, dk] = k.shape
     [nv, sv, hv, dv] = v.shape

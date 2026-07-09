@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.18)
 if(DEFINED ENV{FLASH_ATTN_CUDA_ARCHS})
     set(FLASH_ATTN_CUDA_ARCHS $ENV{FLASH_ATTN_CUDA_ARCHS})
 else()
-    set(FLASH_ATTN_CUDA_ARCHS "90a")
+    set(FLASH_ATTN_CUDA_ARCHS "80;90a")
 endif()
 
 message(STATUS "Using FLASH_ATTN_CUDA_ARCHS: ${FLASH_ATTN_CUDA_ARCHS}")
@@ -77,7 +77,7 @@ message(STATUS "CMAKE_CUDA_ARCHITECTURES: ${CMAKE_CUDA_ARCHITECTURES}")
 
 find_package(CUDAToolkit REQUIRED)
 
-if (${NO_OPTIONS_FILE})
+if(NO_OPTIONS_FILE)
     set(CMAKE_CUDA_USE_RESPONSE_FILE_FOR_INCLUDES "0")
     set(CMAKE_CXX_USE_RESPONSE_FILE_FOR_INCLUDES "0")
 endif()
@@ -149,7 +149,34 @@ install(TARGETS flash_api
         DESTINATION ${SKBUILD_PLATLIB_DIR}/flash_attn_jax_lib
 )
 
-## === Hopper ===
+## === Hopper (FA3) ===
+
+# FA3 has two kernel families:
+#  - sm90 kernels (wgmma/TMA), which require compute capability 9.0a exactly
+#  - sm80-style kernels covering Ampere/Ada and consumer Blackwell (80, 86, 89, 120, 121)
+# Build whichever families the requested arch list covers; skip FA3 entirely if neither.
+set(SM8x_CUDA_ARCHS ${FLASH_ATTN_CUDA_ARCHS})
+list(FILTER SM8x_CUDA_ARCHS INCLUDE REGEX "^(80|86|89|120|121)a?$")
+set(SM9x_CUDA_ARCHS ${FLASH_ATTN_CUDA_ARCHS})
+list(FILTER SM9x_CUDA_ARCHS INCLUDE REGEX "^90a$")
+
+if("90" IN_LIST FLASH_ATTN_CUDA_ARCHS)
+    message(WARNING "FA3 SM90 kernels require '90a' (not '90') in FLASH_ATTN_CUDA_ARCHS; they will be disabled")
+endif()
+
+if(NOT SM8x_CUDA_ARCHS)
+    set(FLASHATTENTION_DISABLE_SM8x 1)
+endif()
+if(NOT SM9x_CUDA_ARCHS)
+    set(FLASHATTENTION_DISABLE_SM90 1)
+endif()
+
+if(FLASHATTENTION_DISABLE_SM8x AND FLASHATTENTION_DISABLE_SM90)
+    message(STATUS "FA3: no compatible archs in FLASH_ATTN_CUDA_ARCHS (need 90a and/or 80/86/89/120/121); skipping flash_hopper_ffi")
+else()
+
+message(STATUS "FA3 sm80-family archs: '${SM8x_CUDA_ARCHS}', sm90 archs: '${SM9x_CUDA_ARCHS}'")
+set(HOPPER_CUDA_ARCHS ${SM8x_CUDA_ARCHS} ${SM9x_CUDA_ARCHS})
 
 file(GLOB HOPPER_CUDA_SOURCES_SM80
     "csrc/hopper/gpu/instantiations/*_sm80.cu"
@@ -157,9 +184,9 @@ file(GLOB HOPPER_CUDA_SOURCES_SM80
 file(GLOB HOPPER_CUDA_SOURCES_SM90
     "csrc/hopper/gpu/instantiations/*_sm90.cu"
 )
-file(GLOB HOPPER_CUDA_SOURCES
+set(HOPPER_CUDA_SOURCES
     "csrc/hopper/gpu/flash_prepare_scheduler.cu"
-    "csrc/hopper/gpu/flash_fwd_combine.cu",
+    "csrc/hopper/gpu/flash_fwd_combine.cu"
 )
 
 file(GLOB HOPPER_CC_SOURCES
@@ -176,6 +203,11 @@ set(FLASHATTENTION_DISABLE_FP8 1)
 list(FILTER HOPPER_CUDA_SOURCES_SM80 EXCLUDE REGEX "all")
 list(FILTER HOPPER_CUDA_SOURCES_SM90 EXCLUDE REGEX "all")
 
+# FA3 backward isn't wired up (backward always dispatches to FA2), so don't
+# compile the backward kernel instantiations.
+list(FILTER HOPPER_CUDA_SOURCES_SM80 EXCLUDE REGEX "flash_bwd")
+list(FILTER HOPPER_CUDA_SOURCES_SM90 EXCLUDE REGEX "flash_bwd")
+
 if(FLASHATTENTION_DISABLE_SOFTCAP)
     list(FILTER HOPPER_CUDA_SOURCES_SM80 EXCLUDE REGEX "softcap")
     list(FILTER HOPPER_CUDA_SOURCES_SM90 EXCLUDE REGEX "softcap")
@@ -189,19 +221,6 @@ if(FLASHATTENTION_DISABLE_FP8)
     list(FILTER HOPPER_CUDA_SOURCES_SM90 EXCLUDE REGEX "e4m3")
 endif()
 
-# Extract SM8x architectures (80 and 86)
-set(SM8x_CUDA_ARCHS ${FLASH_ATTN_CUDA_ARCHS})
-list(FILTER SM8x_CUDA_ARCHS INCLUDE REGEX "^(80|86)$")
-set(SM9x_CUDA_ARCHS ${FLASH_ATTN_CUDA_ARCHS})
-list(FILTER SM9x_CUDA_ARCHS EXCLUDE REGEX "^(80|86)$")
-
-
-if(NOT SM8x_CUDA_ARCHS)
-  set(FLASHATTENTION_DISABLE_SM8x 1)
-endif()
-
-
-
 set(HOPPER_CUDA_FLAGS
     -O3
     --use_fast_math
@@ -213,8 +232,11 @@ set(HOPPER_CUDA_FLAGS
     -U__CUDA_NO_BFLOAT16_CONVERSIONS__
     -DFLASHATTENTION_DISABLE_DROPOUT=1
     -DFLASHATTENTION_DISABLE_ALIBI=1
+    $<$<BOOL:${FLASHATTENTION_DISABLE_FP8}>:-DFLASHATTENTION_DISABLE_FP8=1>
     $<$<BOOL:${FLASHATTENTION_DISABLE_SOFTCAP}>:-DFLASHATTENTION_DISABLE_SOFTCAP=1>
     $<$<BOOL:${FLASHATTENTION_DISABLE_PAGEDKV}>:-DFLASHATTENTION_DISABLE_PAGEDKV=1>
+    $<$<BOOL:${FLASHATTENTION_DISABLE_SM8x}>:-DFLASHATTENTION_DISABLE_SM8x=1>
+    $<$<BOOL:${FLASHATTENTION_DISABLE_SM90}>:-DFLASHATTENTION_DISABLE_SM90=1>
 )
 set(HOPPER_CXX_FLAGS
     -DFLASHATTENTION_DISABLE_DROPOUT=1
@@ -223,13 +245,14 @@ set(HOPPER_CXX_FLAGS
     $<$<BOOL:${FLASHATTENTION_DISABLE_SOFTCAP}>:-DFLASHATTENTION_DISABLE_SOFTCAP=1>
     $<$<BOOL:${FLASHATTENTION_DISABLE_PAGEDKV}>:-DFLASHATTENTION_DISABLE_PAGEDKV=1>
     $<$<BOOL:${FLASHATTENTION_DISABLE_SM8x}>:-DFLASHATTENTION_DISABLE_SM8x=1>
+    $<$<BOOL:${FLASHATTENTION_DISABLE_SM90}>:-DFLASHATTENTION_DISABLE_SM90=1>
 )
 
 # SM80 objects
 if(NOT FLASHATTENTION_DISABLE_SM8x)
     add_library(hopper_sm80_objs OBJECT ${HOPPER_CUDA_SOURCES_SM80})
     set_target_properties(hopper_sm80_objs PROPERTIES
-        CUDA_ARCHITECTURES ${SM8x_CUDA_ARCHS}
+        CUDA_ARCHITECTURES "${SM8x_CUDA_ARCHS}"
         JOB_POOL_COMPILE cuda
         POSITION_INDEPENDENT_CODE ON)
     target_compile_options(hopper_sm80_objs PRIVATE
@@ -243,25 +266,26 @@ if(NOT FLASHATTENTION_DISABLE_SM8x)
 endif()
 
 # SM90 objects
-add_library(hopper_sm90_objs OBJECT ${HOPPER_CUDA_SOURCES_SM90})
-set_target_properties(hopper_sm90_objs PROPERTIES
-    CUDA_ARCHITECTURES ${SM9x_CUDA_ARCHS}
-    JOB_POOL_COMPILE cuda
-    POSITION_INDEPENDENT_CODE ON)
+if(NOT FLASHATTENTION_DISABLE_SM90)
+    add_library(hopper_sm90_objs OBJECT ${HOPPER_CUDA_SOURCES_SM90})
+    set_target_properties(hopper_sm90_objs PROPERTIES
+        CUDA_ARCHITECTURES "${SM9x_CUDA_ARCHS}"
+        JOB_POOL_COMPILE cuda
+        POSITION_INDEPENDENT_CODE ON)
+    target_compile_options(hopper_sm90_objs PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:${HOPPER_CUDA_FLAGS}>
+    )
+    target_include_directories(hopper_sm90_objs PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/csrc/cutlass/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/csrc/hopper/gpu
+        ${CMAKE_CURRENT_SOURCE_DIR}/csrc
+    )
+endif()
 
-# Apply common compile options to both
-target_compile_options(hopper_sm90_objs PRIVATE
-    $<$<COMPILE_LANGUAGE:CUDA>:${HOPPER_CUDA_FLAGS}>
-)
-target_include_directories(hopper_sm90_objs PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/csrc/cutlass/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/csrc/hopper/gpu
-    ${CMAKE_CURRENT_SOURCE_DIR}/csrc
-)
-
+# Arch-independent kernels (scheduler, split-KV combine), built for every FA3 arch
 add_library(hopper_common_objs OBJECT ${HOPPER_CUDA_SOURCES})
 set_target_properties(hopper_common_objs PROPERTIES
-    CUDA_ARCHITECTURES ${FLASH_ATTN_CUDA_ARCHS}
+    CUDA_ARCHITECTURES "${HOPPER_CUDA_ARCHS}"
     JOB_POOL_COMPILE cuda
     POSITION_INDEPENDENT_CODE ON)
 target_compile_options(hopper_common_objs PRIVATE
@@ -277,7 +301,7 @@ target_include_directories(hopper_common_objs PRIVATE
 nanobind_add_module(flash_hopper_ffi
     ${HOPPER_CC_SOURCES}
     $<$<NOT:$<BOOL:${FLASHATTENTION_DISABLE_SM8x}>>:$<TARGET_OBJECTS:hopper_sm80_objs>>
-    $<TARGET_OBJECTS:hopper_sm90_objs>
+    $<$<NOT:$<BOOL:${FLASHATTENTION_DISABLE_SM90}>>:$<TARGET_OBJECTS:hopper_sm90_objs>>
     $<TARGET_OBJECTS:hopper_common_objs>
 )
 set_property(TARGET flash_hopper_ffi PROPERTY JOB_POOL_COMPILE cuda)
@@ -299,3 +323,5 @@ target_link_libraries(flash_hopper_ffi PRIVATE
 install(TARGETS flash_hopper_ffi
         DESTINATION ${SKBUILD_PLATLIB_DIR}/flash_attn_jax_lib
 )
+
+endif() # FA3 arch gate

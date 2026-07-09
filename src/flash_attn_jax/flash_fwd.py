@@ -29,7 +29,7 @@ from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 
 from flash_attn_jax.ring_attention import ring_fwd
-from flash_attn_jax.util import num_splits_heuristic, round_multiple, array_mapping, get_sm_count
+from flash_attn_jax.util import num_splits_heuristic, round_multiple, array_mapping, get_sm_count, get_compute_capability
 
 # ==== Register primitives ====
 
@@ -180,27 +180,28 @@ def _flash_mha_fwd_lowering_fa3(q, k, v, *,
     # pass num_splits=1, we just use 1 here.
     num_splits = 1
 
-    # Calculate scheduler_metadata size
+    # Calculate scheduler_metadata size (arch-dependent, must match the C++ derivation)
+    arch = get_compute_capability()
     metadata_size = calculate_scheduler_metadata_size(
         batch_size=n,
         num_splits=num_splits,
         is_causal=is_causal,
         is_local=is_local,
-        arch=90,  # SM90 (Hopper)
+        arch=arch,
     )
 
     if os.environ.get("FLASH_ATTN_JAX_DEBUG", '0') == '1':
-        from flash_attn_jax.fa3_util import round_up_headdim, round_up_headdim_v, tile_size_fwd_sm90_py
+        from flash_attn_jax.fa3_util import round_up_headdim, round_up_headdim_v, tile_size_fwd_py
         d_rounded = round_up_headdim(d)
         dv_rounded = round_up_headdim_v(d)
         element_size = 1 if dtype == jnp.float8_e4m3fn else 2
-        kBlockM, kBlockN = tile_size_fwd_sm90_py(d_rounded, dv_rounded, is_causal, is_local, element_size)
+        kBlockM, kBlockN = tile_size_fwd_py(arch, d_rounded, dv_rounded, is_causal, is_local, element_size)
         num_n_blocks = (lk + kBlockN - 1) // kBlockN
         qhead_per_khead = hq // hk
         seqlen_q_packgqa = lq * qhead_per_khead
         num_m_blocks = (seqlen_q_packgqa + kBlockM - 1) // kBlockM
         total_mblocks = n * hk * num_m_blocks
-        print(f"[flash_attn_jax] FA3 fwd_lowering: n={n} lq={lq} lk={lk} hq={hq} hk={hk} d={d} dtype={dtype} "
+        print(f"[flash_attn_jax] FA3 fwd_lowering: n={n} lq={lq} lk={lk} hq={hq} hk={hk} d={d} dtype={dtype} arch={arch} "
               f"d_rounded={d_rounded} dv_rounded={dv_rounded} is_causal={is_causal} is_local={is_local} "
               f"kBlockM={kBlockM} kBlockN={kBlockN} num_m_blocks={num_m_blocks} num_n_blocks={num_n_blocks} "
               f"total_mblocks={total_mblocks} num_splits={num_splits} metadata_size={metadata_size} "

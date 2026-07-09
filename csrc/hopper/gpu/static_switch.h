@@ -128,23 +128,37 @@
   #define CLUSTER_SWITCH BOOL_SWITCH
 #endif
 
-#ifdef FLASHATTENTION_DISABLE_SM8x
+// The sm90 (wgmma) kernels only run on compute capability 9.0 exactly; every other
+// arch uses the sm80-style kernels. Ada (86/89) and consumer Blackwell (120/121) have
+// less shared memory than sm80/sm90/sm100, so they get the reduced-smem Arch=86 tiles.
+#if defined(FLASHATTENTION_DISABLE_SM8x)
   #define ARCH_SWITCH(ARCH, ARCH_NAME, ...)                                                      \
   [&] {                                                                                          \
     constexpr static int ARCH_NAME = 90;                                                         \
     return __VA_ARGS__();                                                                        \
   }()
+#elif defined(FLASHATTENTION_DISABLE_SM90)
+  #define ARCH_SWITCH(ARCH, ARCH_NAME, ...)                                                      \
+  [&] {                                                                                          \
+    if (ARCH == 86 || ARCH == 89 || ARCH >= 120) {                                               \
+      constexpr static int ARCH_NAME = 86;                                                       \
+      return __VA_ARGS__();                                                                      \
+    } else {                                                                                     \
+      constexpr static int ARCH_NAME = 80;                                                       \
+      return __VA_ARGS__();                                                                      \
+    }                                                                                            \
+  }()
 #else
   #define ARCH_SWITCH(ARCH, ARCH_NAME, ...)                                                      \
   [&] {                                                                                          \
-    if (ARCH == 86 || ARCH == 89) {                                                              \
+    if (ARCH == 86 || ARCH == 89 || ARCH >= 120) {                                               \
       constexpr static int ARCH_NAME = 86;                                                       \
       return __VA_ARGS__();                                                                      \
-    } else if (ARCH < 90) {                                                                      \
-      constexpr static int ARCH_NAME = 80;                                                       \
+    } else if (ARCH == 90) {                                                                     \
+      constexpr static int ARCH_NAME = 90;                                                       \
       return __VA_ARGS__();                                                                      \
     } else {                                                                                     \
-      constexpr static int ARCH_NAME = 90;                                                       \
+      constexpr static int ARCH_NAME = 80;                                                       \
       return __VA_ARGS__();                                                                      \
     }                                                                                            \
   }()

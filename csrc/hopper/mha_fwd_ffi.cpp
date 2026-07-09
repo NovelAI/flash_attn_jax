@@ -132,7 +132,7 @@ std::vector<int64_t> get_strides(const Buffer& buf) {
 }
 
 inline bool get_pagedkv_tma(Flash_fwd_params const& params) {
-    if (params.arch < 90 || !params.page_table || params.leftpad_k || params.knew_ptr) { return false; }
+    if (params.arch != 90 || !params.page_table || params.leftpad_k || params.knew_ptr) { return false; }
     // This needs to match the kernel configs
     auto kBlockMN_kernel_args_sm90 = tile_size_fwd_sm90(params.d_rounded, params.dv_rounded, params.is_causal, params.is_local, params.is_e4m3 ? 1 : 2 /*element_size*/, false /*v_colmajor*/, false /*paged_kv_non_TMA*/, params.softcap > 0.f);
     int const kBlockM = std::get<0>(kBlockMN_kernel_args_sm90);
@@ -145,7 +145,7 @@ inline bool get_pagedkv_tma(Flash_fwd_params const& params) {
 inline bool get_pack_gqa(Flash_fwd_params const& params) {
     // Always enable PackGQA for Sm8x or PagedKVNonTMA or Split to reduce compilation and binary size.
     // Has little effect on speed.
-    if (params.arch < 90 || (params.page_table && !params.pagedkv_tma) || params.num_splits > 1) { return true; }
+    if (params.arch != 90 || (params.page_table && !params.pagedkv_tma) || params.num_splits > 1) { return true; }
     #ifdef FLASHATTENTION_DISABLE_PACKGQA
     return false;
     #else
@@ -169,9 +169,11 @@ inline int get_num_splits(Flash_fwd_params const& params) {
     auto kBlockMN_kernel_args_sm90 = tile_size_fwd_sm90(params.d_rounded, params.dv_rounded, params.is_causal, params.is_local, params.is_e4m3 ? 1 : 2 /*element_size*/, false /*v_colmajor*/, params.page_table && !params.pagedkv_tma, params.softcap > 0.f);
     // Strictly speaking we need to pass in (varlen && params.num_splits > 1) but num_splits
     // has not been set here. It's OK though because we might just underestimate kBlockN a bit
-    auto kBlockMN_kernel_args_sm8x = tile_size_fwd_sm8x(params.arch == 86 || params.arch == 89, params.d_rounded, params.dv_rounded, params.is_causal, params.is_local, params.is_e4m3 ? 1 : 2 /*element_size*/, params.page_table, varlen, params.softcap > 0.f, params.knew_ptr);
-    int const kBlockM = params.arch >= 90 ? std::get<0>(kBlockMN_kernel_args_sm90) : std::get<0>(kBlockMN_kernel_args_sm8x);
-    int const kBlockN = params.arch >= 90 ? std::get<1>(kBlockMN_kernel_args_sm90) : std::get<1>(kBlockMN_kernel_args_sm8x);
+    // Ada (86/89) and consumer Blackwell (120/121) have less smem and use the reduced tiles (must match ARCH_SWITCH)
+    bool const reduced_smem = params.arch == 86 || params.arch == 89 || params.arch >= 120;
+    auto kBlockMN_kernel_args_sm8x = tile_size_fwd_sm8x(reduced_smem, params.d_rounded, params.dv_rounded, params.is_causal, params.is_local, params.is_e4m3 ? 1 : 2 /*element_size*/, params.page_table, varlen, params.softcap > 0.f, params.knew_ptr);
+    int const kBlockM = params.arch == 90 ? std::get<0>(kBlockMN_kernel_args_sm90) : std::get<0>(kBlockMN_kernel_args_sm8x);
+    int const kBlockN = params.arch == 90 ? std::get<1>(kBlockMN_kernel_args_sm90) : std::get<1>(kBlockMN_kernel_args_sm8x);
     int seqlen_q_packgqa = params.seqlen_q * (params.h / params.h_k);
     // If is_local, we're not going to load all of seqlen_k
     int const seqlen_k_loaded = !params.is_local
@@ -185,7 +187,18 @@ inline int get_num_splits(Flash_fwd_params const& params) {
     // We assume the case where there's 1 long sequence and the rest are short, i.e. pretending
     // that batch = 1.
     int total_mblocks = (params.num_splits_dynamic_ptr ? 1 : params.b) * params.h_k * num_m_blocks;
-    return num_splits_heuristic(total_mblocks, params.num_sm, num_n_blocks, num_m_blocks, size_one_kv_head, params.is_causal || params.is_local, 128);
+    int result = num_splits_heuristic(total_mblocks, params.num_sm, num_n_blocks, num_m_blocks, size_one_kv_head, params.is_causal || params.is_local, 128);
+    if (flash_debug()) {
+        fprintf(stderr, "[flash_attn_jax] FA3 get_num_splits: arch=%d b=%d seqlen_q=%d seqlen_k=%d h=%d h_k=%d "
+                "d=%d dv=%d d_rounded=%d dv_rounded=%d is_causal=%d is_local=%d "
+                "kBlockM=%d kBlockN=%d num_m_blocks=%d num_n_blocks=%d total_mblocks=%d "
+                "num_sm=%d size_one_kv_head=%d num_splits_dynamic_ptr=%d => num_splits=%d\n",
+                params.arch, params.b, params.seqlen_q, params.seqlen_k, params.h, params.h_k,
+                params.d, params.dv, params.d_rounded, params.dv_rounded, params.is_causal, params.is_local,
+                kBlockM, kBlockN, num_m_blocks, num_n_blocks, total_mblocks,
+                params.num_sm, size_one_kv_head, params.num_splits_dynamic_ptr != nullptr, result);
+    }
+    return result;
     #endif
 }
 
@@ -661,7 +674,7 @@ mha_fwd_ffi_impl(
     // This needs to be set after get_num_splits
     ffi::Buffer<ffi::S32>& tile_count_semaphore = *scheduler_metadata;  // Contains the semaphore and optionally num_splits_dynamic
     // We don't use the persistent scheduler if Split and not Varlen
-    bool const scheduler_needs_semaphore = params.arch >= 90
+    bool const scheduler_needs_semaphore = params.arch == 90
         ? (((params.is_causal || params.is_local) && (params.num_splits == 1)) || is_varlen)
         : ((params.is_causal && !is_varlen) || (is_varlen && params.num_splits > 1));
     // std::cerr << "[DEBUG] scheduler_needs_semaphore=" << scheduler_needs_semaphore << ", is_varlen=" << is_varlen << ", is_causal=" << params.is_causal << ", is_local=" << params.is_local << ", num_splits=" << params.num_splits << "\n";
@@ -834,7 +847,7 @@ mha_fwd_ffi_impl(
     FFI_CHECK(params.num_splits == 1) << "This flash attention build does not support splits.";
     #endif
     #ifdef FLASHATTENTION_DISABLE_PACKGQA
-    FFI_CHECK(!params.pack_gqa || params.arch < 90 || (params.page_table && !params.pagedkv_tma) || params.num_splits > 1) << "This flash attention build does not support pack_gqa.";
+    FFI_CHECK(!params.pack_gqa || params.arch != 90 || (params.page_table && !params.pagedkv_tma) || params.num_splits > 1) << "This flash attention build does not support pack_gqa.";
     #endif
     #ifdef FLASHATTENTION_DISABLE_PAGEDKV
     FFI_CHECK(!(params.page_table && !params.pagedkv_tma)) << "This flash attention build does not support paged KV.";

@@ -7,6 +7,7 @@ import jax._src.dispatch
 
 from .varlen_bwd import flash_mha_varlen_bwd
 from .varlen_fwd import flash_mha_varlen_fwd
+from .flash_hlo import has_fa3
 
 
 @jax.tree_util.register_static
@@ -39,6 +40,9 @@ def flash_mha_varlen(q, k, v, seqlens_q, seqlens_k=None, *,
                      window_size: tuple = (-1, -1), backend: Optional[str] = None):
     if backend is None:
         backend = os.environ.get("FLASH_ATTN_JAX_BACKEND", "fa2")
+    if backend == "fa3" and not has_fa3():
+        raise RuntimeError("FA3 backend requested but flash_hopper_ffi was not built; "
+                           "rebuild with an FA3-capable arch (90a and/or 80/86/89/120/121) in FLASH_ATTN_CUDA_ARCHS")
     if seqlens_k is None:
         seqlens_k = seqlens_q
     config = FlashConfig(

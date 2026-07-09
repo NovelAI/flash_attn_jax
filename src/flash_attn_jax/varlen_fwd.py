@@ -16,7 +16,7 @@ from einops import rearrange
 import einops
 import math
 
-from flash_attn_jax.util import num_splits_heuristic, round_multiple, get_sm_count
+from flash_attn_jax.util import num_splits_heuristic, round_multiple, get_sm_count, get_compute_capability
 from flash_attn_jax.fa3_util import (
     get_num_splits_fa3,
     calculate_scheduler_metadata_size_varlen,
@@ -196,6 +196,7 @@ def _flash_mha_varlen_fwd_hlo_lowering_fa3(
 
     # Calculate num_splits using varlen-specific heuristics
     # For varlen with dynamic split, assume worst case: batch=1 long sequence
+    arch = get_compute_capability()
     num_splits = get_num_splits_fa3(
         batch_size=1,  # worst case for varlen
         seqlen_q=max_seqlen_q,
@@ -209,8 +210,10 @@ def _flash_mha_varlen_fwd_hlo_lowering_fa3(
         window_size_left=window_size_left,
         window_size_right=window_size_right,
         dtype=dtype,
-        num_sm=114,
+        num_sm=get_sm_count(),
         max_splits=128,
+        arch=arch,
+        varlen=True,
     )
 
     # Calculate scheduler_metadata size for varlen
@@ -219,7 +222,7 @@ def _flash_mha_varlen_fwd_hlo_lowering_fa3(
         num_splits=num_splits,
         is_causal=is_causal,
         is_local=is_local,
-        arch=90,
+        arch=arch,
     )
 
     # print('[varlen] Computing num_splits and metadata_size for configuration:')

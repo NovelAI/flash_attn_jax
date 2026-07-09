@@ -139,6 +139,107 @@ def tile_size_fwd_sm90_py(
             return (128, 64 if is_local else 128)
 
 
+def tile_size_fwd_sm8x_py(
+    reduced_smem: bool,
+    headdim: int,
+    headdim_v: int,
+    is_causal: bool,
+    is_local: bool,
+    element_size: int = 2,
+    paged_kv: bool = False,
+    varlen_and_split: bool = False,
+    softcap: bool = False,
+    append_kv: bool = False,
+) -> tuple[int, int]:
+    """
+    Calculate sm80-family tile sizes for Flash Attention 3 forward pass.
+
+    Python port of tile_size_fwd_sm8x from csrc/hopper/gpu/tile_size.h (kBlockM/kBlockN
+    only). These kernels cover Ampere/Ada and consumer Blackwell.
+
+    Args:
+        reduced_smem: True on archs with ~100KB smem (86/89/120/121), matching the
+            sm86_or_89 flag in C++ (see reduced_smem in mha_fwd_ffi.cpp get_num_splits)
+        headdim: Rounded head dimension (64, 96, 128, 192, or 256)
+        headdim_v: Rounded V head dimension
+        is_causal: Whether causal masking is enabled
+        is_local: Whether local/window attention is enabled
+        element_size: 2 for fp16/bf16, 1 for fp8_e4m3
+        paged_kv: Whether using paged KV
+        varlen_and_split: Whether varlen with split-KV
+        softcap: Whether softcap is enabled (unused for kBlockM/kBlockN)
+        append_kv: Whether appending new KV (k_new)
+
+    Returns:
+        (kBlockM, kBlockN): Tile sizes for M and N dimensions
+    """
+    if element_size == 2:  # fp16/bf16
+        if headdim <= 64:
+            return (128, 80 if varlen_and_split else (96 if is_local else 112))
+        elif headdim <= 96:
+            return (128, 48 if (varlen_and_split or is_local) else 64)
+        elif headdim <= 128:
+            use_8_warps = reduced_smem or varlen_and_split
+            if use_8_warps:
+                if varlen_and_split:
+                    kBlockN = 96 if is_local else 112
+                else:
+                    kBlockN = 96 if is_local else 128
+            else:
+                kBlockN = 48 if is_local else 64
+            return (128, kBlockN)
+        elif headdim <= 192:
+            kBlockN_64 = append_kv or is_local or varlen_and_split or paged_kv
+            return (128, 64 if kBlockN_64 else 96)
+        else:  # headdim <= 256
+            if reduced_smem:
+                if append_kv:
+                    kBlockN = 32
+                else:
+                    kBlockN = 48 if (varlen_and_split or is_local) else 64
+            else:
+                if append_kv:
+                    kBlockN = 48
+                else:
+                    kBlockN = 64 if (varlen_and_split or is_local) else 96
+            return (128, kBlockN)
+    else:  # element_size == 1 (fp8) - placeholder in C++ too
+        return (128, 64)
+
+
+def is_reduced_smem_arch(arch: int) -> bool:
+    """Archs with ~100KB smem per SM (Ada, consumer Blackwell) that need reduced sm8x tiles.
+
+    Must match the reduced_smem condition in get_num_splits (mha_fwd_ffi.cpp) and
+    ARCH_SWITCH (static_switch.h)."""
+    return arch == 86 or arch == 89 or arch >= 120
+
+
+def tile_size_fwd_py(
+    arch: int,
+    headdim: int,
+    headdim_v: int,
+    is_causal: bool,
+    is_local: bool,
+    element_size: int = 2,
+    paged_kv_non_tma: bool = False,
+    softcap: bool = False,
+    varlen_and_split: bool = False,
+) -> tuple[int, int]:
+    """Arch-dispatched (kBlockM, kBlockN), mirroring get_num_splits in mha_fwd_ffi.cpp."""
+    if arch == 90:
+        return tile_size_fwd_sm90_py(
+            headdim, headdim_v, is_causal, is_local, element_size,
+            paged_kv_non_tma=paged_kv_non_tma, softcap=softcap,
+        )
+    else:
+        return tile_size_fwd_sm8x_py(
+            is_reduced_smem_arch(arch), headdim, headdim_v, is_causal, is_local,
+            element_size, paged_kv=paged_kv_non_tma, varlen_and_split=varlen_and_split,
+            softcap=softcap,
+        )
+
+
 def num_splits_heuristic_extended(
     total_mblocks: int,
     num_sm: int,
@@ -227,9 +328,11 @@ def get_num_splits_fa3(
     dtype: jnp.dtype,
     num_sm: int = 114,
     max_splits: int = 128,
+    arch: int = 90,
+    varlen: bool = False,
 ) -> int:
     """
-    Calculate optimal num_splits for FA3 using SM90 (H100) parameters.
+    Calculate optimal num_splits for FA3.
 
     This is a Python port of get_num_splits from csrc/hopper/mha_fwd_ffi.cpp.
     It determines whether to use split-KV attention based on SM utilization,
@@ -248,8 +351,10 @@ def get_num_splits_fa3(
         window_size_left: Left window size (-1 for infinite)
         window_size_right: Right window size (-1 for infinite)
         dtype: Data type (fp16/bf16/fp8_e4m3fn)
-        num_sm: Number of SMs (default 114 for H100 SXM5)
+        num_sm: Number of SMs on the device (use util.get_sm_count())
         max_splits: Maximum allowed splits (default 128)
+        arch: Device compute capability as major*10+minor (use util.get_compute_capability())
+        varlen: Whether this is the varlen path (affects sm8x tile sizes)
 
     Returns:
         num_splits: Number of splits to use (1 if no splitting beneficial)
@@ -261,11 +366,12 @@ def get_num_splits_fa3(
     # Determine element size (bytes per element)
     element_size = 1 if dtype == jnp.float8_e4m3fn else 2
 
-    # Get SM90 tile sizes for this configuration
-    # Note: For JAX non-varlen implementation:
+    # Get tile sizes for this configuration and arch
+    # Note: For JAX implementation:
     # - paged_kv_non_tma=False (no paging support yet)
     # - softcap=False (TODO: add softcap support if needed)
-    kBlockM, kBlockN = tile_size_fwd_sm90_py(
+    kBlockM, kBlockN = tile_size_fwd_py(
+        arch=arch,
         headdim=d_rounded,
         headdim_v=dv_rounded,
         is_causal=is_causal,
@@ -273,6 +379,7 @@ def get_num_splits_fa3(
         element_size=element_size,
         paged_kv_non_tma=False,
         softcap=False,
+        varlen_and_split=varlen,
     )
 
     # Calculate effective sequence length loaded for local attention
@@ -342,7 +449,7 @@ def calculate_scheduler_metadata_size(
 
     # Determine if scheduler needs semaphore
     # From mha_fwd_ffi.cpp:664-666
-    if arch >= 90:
+    if arch == 90:
         scheduler_needs_semaphore = ((is_causal or is_local) and (num_splits == 1)) or is_varlen
     else:
         scheduler_needs_semaphore = (is_causal and not is_varlen) or (is_varlen and num_splits > 1)
@@ -404,7 +511,7 @@ def calculate_scheduler_metadata_size_varlen(
     is_varlen = True
 
     # Determine if scheduler needs semaphore (line 664-666)
-    if arch >= 90:
+    if arch == 90:
         scheduler_needs_semaphore = ((is_causal or is_local) and (num_splits == 1)) or is_varlen
     else:
         scheduler_needs_semaphore = (is_causal and not is_varlen) or (is_varlen and num_splits > 1)
