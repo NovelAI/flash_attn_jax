@@ -21,6 +21,7 @@ authors = [
 ]
 dependencies = [
     "jax>=0.5.0, <0.11.0",
+    "einops",
     "apache-tvm-ffi>=0.1.12",
     "jax-tvm-ffi>=0.1.3",
 ]
@@ -52,6 +53,9 @@ Homepage = "https://github.com/nshepperd/flash_attn_jax"
 
 [tool.scikit-build]
 wheel.expand-macos-universal-tags = false
+# The kernel libraries are tvm-ffi shared libraries (stable C ABI, no CPython
+# dependency), so one wheel covers all Python versions: py3-none-<plat>.
+wheel.py-api = "py3"
 cmake.version = ">=3.26.1"
 ninja.version = ">=1.11"
 build.verbose = true
@@ -82,9 +86,11 @@ CMAKE_VERBOSE_MAKEFILE = "ON"
 
 [tool.cibuildwheel]
 archs = ["x86_64"]
+# The wheel is py3-none (Python-ABI-independent), so build it under a single
+# Python version — every interpreter would produce an identical wheel.
+build = "cp312-manylinux_x86_64"
 # manylinux-x86_64-image = "pytorch/manylinux2_28-builder:cuda12.8"
 # before-all = "bash scripts/install-cuda-linux.sh"
-# build = "cp{311,312,313}-manylinux_x86_64"
 repair-wheel-command = "auditwheel repair --exclude=libcudart.so* --exclude=libcuda.so* -w {dest_dir} {wheel}"
 
 # [tool.cibuildwheel.environment]
