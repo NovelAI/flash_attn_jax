@@ -30,8 +30,9 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        python-version: ['cp311', 'cp312', 'cp313', 'cp314']
-        cuda-version: ['12.8', '12.9', '13.0']
+        # The wheels are py3-none (kernels are tvm-ffi .so's with no Python
+        # ABI dependency), so one build covers all Python versions.
+        cuda-version: ['12.8', '13.0']
 
     steps:
       - name: Checkout
@@ -44,10 +45,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
-      - name: Set CUDA major version
-        run: |
-          echo "MATRIX_CUDA_MAJOR=$(echo ${{ matrix.cuda-version }} | awk -F \. {'print $1'})" >> $GITHUB_ENV
 
       - name: Free up disk space
         run: |
@@ -63,7 +60,8 @@ jobs:
       - name: Build wheels
         uses: pypa/cibuildwheel@v3.3.1
         env:
-          CIBW_BUILD: ${{ matrix.python-version }}-manylinux_x86_64
+          # Build selector comes from pyproject (build = "cp312-manylinux_x86_64");
+          # any interpreter produces the same py3-none wheel.
           CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
           CIBW_BEFORE_ALL: bash scripts/install-cuda-linux.sh ${{ matrix.cuda-version }}
           CIBW_ENVIRONMENT: PATH=/usr/local/cuda/bin:/opt/rh/gcc-toolset-13/root/usr/bin:$PATH CUDA_HOME=/usr/local/cuda MAX_JOBS=6
@@ -77,7 +75,7 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: wheel-${{ matrix.python-version }}-cu${{ matrix.cuda-version }}
+          name: wheel-cu${{ matrix.cuda-version }}
           path: ./wheelhouse/*.whl
 
   create_release:
@@ -136,7 +134,7 @@ jobs:
   #       uses: actions/download-artifact@v4
   #       with:
   #         path: dist/
-  #         pattern: wheel-*-cu12.8
+  #         pattern: wheel-cu12.8
   #         merge-multiple: true
 
   #     - name: Remove CUDA tag for pypi
