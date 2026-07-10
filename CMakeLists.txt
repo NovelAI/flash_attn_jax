@@ -28,7 +28,9 @@ endif()
 message(STATUS "Using MAX_JOBS: ${MAX_JOBS}")
 
 set(CMAKE_JOB_POOLS cuda=${MAX_JOBS} cxx=${MAX_JOBS})
-set(CMAKE_INSTALL_RPATH "$ORIGIN/nvidia/cuda_runtime/lib")
+# The .so's install into site-packages/flash_attn_jax_lib/; the nvidia pip
+# packages are a sibling top-level directory, plus tvm_ffi/lib for libtvm_ffi.
+set(CMAKE_INSTALL_RPATH "$ORIGIN/../nvidia/cuda_runtime/lib;$ORIGIN/../tvm_ffi/lib")
 # Make sure RPATH is used instead of RUNPATH
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE)
 
