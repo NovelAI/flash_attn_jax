@@ -13,12 +13,8 @@
 #include "hopper/gpu/tile_size.h"
 #include "hopper/gpu/heuristics.h"
 #include "hopper/gpu/static_switch.h"
-#include "xla/ffi/api/api.h"
-#include "xla/ffi/api/ffi.h"
 
 #include "mha_fwd_ffi.h"
-
-namespace ffi = xla::ffi;
 
 // Forward declarations of kernel instantiation templates
 // These are explicitly instantiated in gpu/instantiations/*.cu files
@@ -370,44 +366,40 @@ void run_mha_fwd_combine(Flash_fwd_params &params, cudaStream_t stream, bool ena
 // h: num_heads
 // h_k: num_heads_k
 // d: head_size
-ffi::Error
+void
 mha_fwd_ffi_impl(
-        cudaStream_t stream, int32_t device_ordinal,
-        ffi::AnyBuffer q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seqlens_q
-        ffi::AnyBuffer k,  // (b_k, s_k, h_k, d) or (total_k, h_k, d) if there is cu_seqlens_k or (num_pages, page_size, h_k, d) if there is page_table.
-        ffi::AnyBuffer v,  // (b_k, s_k, h_k, dv) or (total_k, h_k, dv) if there is cu_seqlens_k or (num_pages, page_size, h_k, dv) if there is page_table.
+        // Outputs (pre-allocated by XLA):
+        ffi::TensorArg out, // (b, s_q, h, dv) or (total_q, h, dv) if there is cu_seqlens_q
+        ffi::TensorArg softmax_lse, // (b, h, s_q) or (h, total_q) if there is cu_seqlens_q
+        ffi::TensorArg out_accum,
+        ffi::TensorArg softmax_lse_accum,
+        ffi::TensorArg scheduler_metadata,
 
-        // Optional arrays:
-        ffi::AnyBuffer k_new,  // (b, s_k_new, h_k, d) or (total_k_new, h_k, d) if there is cu_seqlens_k_new
-        ffi::AnyBuffer v_new,  // (b, s_k_new, h_k, dv) or (total_k_new, h_k, dv) if there is cu_seqlens_k_new
-        ffi::AnyBuffer q_v,  // (b, s_q, h, dv) or (total_q_new, h, dv) if there is cu_seqlens_q
-        ffi::Buffer<ffi::S32> cu_seqlens_q,  // b+1
-        ffi::Buffer<ffi::S32> cu_seqlens_k,  // b+1
-        ffi::Buffer<ffi::S32> cu_seqlens_k_new,  // b+1
+        // Inputs:
+        ffi::TensorArg q,   // (b, s_q, h, d) or (total_q, h, d) if there is cu_seqlens_q
+        ffi::TensorArg k,  // (b_k, s_k, h_k, d) or (total_k, h_k, d) if there is cu_seqlens_k or (num_pages, page_size, h_k, d) if there is page_table.
+        ffi::TensorArg v,  // (b_k, s_k, h_k, dv) or (total_k, h_k, dv) if there is cu_seqlens_k or (num_pages, page_size, h_k, dv) if there is page_table.
+        ffi::TensorArg k_new,  // (b, s_k_new, h_k, d) or (total_k_new, h_k, d) if there is cu_seqlens_k_new
+        ffi::TensorArg v_new,  // (b, s_k_new, h_k, dv) or (total_k_new, h_k, dv) if there is cu_seqlens_k_new
+        ffi::TensorArg q_v,  // (b, s_q, h, dv) or (total_q_new, h, dv) if there is cu_seqlens_q
+        ffi::TensorArg cu_seqlens_q,  // b+1
+        ffi::TensorArg cu_seqlens_k,  // b+1
+        ffi::TensorArg cu_seqlens_k_new,  // b+1
         // no seqused.
-        // std::optional<at::Tensor> seqused_q_, // b. If given, only this many elements of each batch element's queries and outputs are used.
-        // std::optional<at::Tensor> seqused_k_, // b. If given, only this many elements of each batch element's keys are used.
-        ffi::Buffer<ffi::S32> page_table, // (b_k, max_num_pages_per_seq)
-        ffi::Buffer<ffi::S32> kv_batch_idx, // b. indices to index into the KV cache
-        ffi::Buffer<ffi::S32> leftpad_k, // b
-        ffi::AnyBuffer rotary_cos, // seqlen_ro x (rotary_dim / 2)
-        ffi::AnyBuffer rotary_sin, // seqlen_ro x (rotary_dim / 2)
-        ffi::Buffer<ffi::S32> seqlens_rotary, // b
-        ffi::Buffer<ffi::F32> q_descale,  // (b, h_k), not (b, h)
-        ffi::Buffer<ffi::F32> k_descale,  // (b, h_k)
-        ffi::Buffer<ffi::F32> v_descale,  // (b, h_k)
+        ffi::TensorArg page_table, // (b_k, max_num_pages_per_seq)
+        ffi::TensorArg kv_batch_idx, // b. indices to index into the KV cache
+        ffi::TensorArg leftpad_k, // b
+        ffi::TensorArg rotary_cos, // seqlen_ro x (rotary_dim / 2)
+        ffi::TensorArg rotary_sin, // seqlen_ro x (rotary_dim / 2)
+        ffi::TensorArg seqlens_rotary, // b
+        ffi::TensorArg q_descale,  // (b, h_k), not (b, h)
+        ffi::TensorArg k_descale,  // (b, h_k)
+        ffi::TensorArg v_descale,  // (b, h_k)
 
-        // Return arrays: out, softmax_lse, out_accum, softmax_lse_accum
-        ffi::Result<ffi::AnyBuffer> out, // (b, s_q, h, dv) or (total_q, h, dv) if there is cu_seqlens_q
-        ffi::ResultBuffer<ffi::F32> softmax_lse, // (b, h, s_q) or (h, total_q) if there is cu_seqlens_q
-        ffi::ResultBuffer<ffi::F32> out_accum,
-        ffi::ResultBuffer<ffi::F32> softmax_lse_accum,
-        ffi::ResultBuffer<ffi::S32> scheduler_metadata,  // (b + 1)
-
-
-        std::optional<int64_t> max_seqlen_q_,
-        std::optional<int64_t> max_seqlen_k_,
-        std::optional<double> softmax_scale_,
+        // Attributes:
+        int64_t max_seqlen_q_,
+        int64_t max_seqlen_k_,
+        double softmax_scale_,
         bool is_causal,
         int64_t window_size_left,
         int64_t window_size_right,
@@ -415,9 +407,13 @@ mha_fwd_ffi_impl(
         double softcap,
         bool is_rotary_interleaved,   // if true, rotary combines indices 0 & 1, else indices 0 & rotary_dim / 2
         int64_t num_splits,
-        std::optional<bool> pack_gqa_,
+        bool pack_gqa_,
         int64_t sm_margin
         ) {
+
+    DLDevice device = q.device();
+    int device_ordinal = device.device_id;
+    cudaStream_t stream = flash_ffi_get_stream(device);
 
     int major, minor;
     FFI_CUDA_CHECK(cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device_ordinal));
@@ -451,19 +447,19 @@ mha_fwd_ffi_impl(
     bool const is_varlen_q = cu_seqlens_q.dimensions().size() > 0;
     if (is_varlen_q) {
         FFI_CHECK(cu_seqlens_q.element_type() == ffi::S32) << "cu_seqlens_q must have dtype torch.int32";
-        FFI_CHECK(max_seqlen_q_.has_value()) << "max_seqlen_q must be provided if cu_seqlens_q is provided";
+        FFI_CHECK(max_seqlen_q_ > 0) << "max_seqlen_q must be provided if cu_seqlens_q is provided";
     }
     bool const is_varlen_k = cu_seqlens_k.dimensions().size() > 0;
     if (is_varlen_k) {
         FFI_CHECK(cu_seqlens_k.element_type() == ffi::S32) << "cu_seqlens_k must have dtype torch.int32";
-        FFI_CHECK(max_seqlen_k_.has_value()) << "max_seqlen_k must be provided if cu_seqlens_k is provided";
+        FFI_CHECK(max_seqlen_k_ > 0) << "max_seqlen_k must be provided if cu_seqlens_k is provided";
         FFI_CHECK(!paged_KV) << "If cu_seqlens_k is passed in, then page table is not supported";
         FFI_CHECK(!(kv_batch_idx.dimensions().size() > 0)) << "If cu_seqlens_k is passed in, then page table is not supported";
     }
 
     auto const sizes = q.dimensions();
     const int batch_size = !is_varlen_q ? sizes[0] : cu_seqlens_q.dimensions()[0] - 1;
-    int seqlen_q = !is_varlen_q ? sizes[1] : max_seqlen_q_.value();
+    int seqlen_q = !is_varlen_q ? sizes[1] : max_seqlen_q_;
     int total_q = !is_varlen_q ? batch_size * sizes[1] : sizes[0];
     int num_heads = q.dimensions()[q.dimensions().size()-2];
     int const head_size = q.dimensions()[q.dimensions().size()-1];
@@ -471,14 +467,11 @@ mha_fwd_ffi_impl(
     int const max_num_pages_per_seq = !paged_KV ? 0 : page_table.dimensions()[1];
     int const num_pages = !paged_KV ? 0 : k.dimensions()[0];
     int const page_size = !paged_KV ? 1 : k.dimensions()[1];
-    int const seqlen_k = !is_varlen_k ? (!paged_KV ? k.dimensions()[1] : max_num_pages_per_seq * page_size) : max_seqlen_k_.value();
+    int const seqlen_k = !is_varlen_k ? (!paged_KV ? k.dimensions()[1] : max_num_pages_per_seq * page_size) : max_seqlen_k_;
     int const total_k = !is_varlen_k ? batch_size * k.dimensions()[1] : k.dimensions()[0];
     int const num_heads_k = k.dimensions()[k.dimensions().size()-2];
     int const batch_size_k = !paged_KV ? (!is_varlen_k ? k.dimensions()[0] : cu_seqlens_k.dimensions()[0] - 1) : page_table.dimensions()[0];
-    double softmax_scale = 1.0 / sqrt(double(head_size));
-    if (softmax_scale_.has_value()) {
-        softmax_scale = softmax_scale_.value();
-    }
+    double softmax_scale = softmax_scale_ != 0.0 ? softmax_scale_ : 1.0 / sqrt(double(head_size));
     if (!(kv_batch_idx.dimensions().size() > 0)) {
         FFI_CHECK(batch_size == batch_size_k) << "batch_size must be equal to batch_size_k";
     }
@@ -560,13 +553,13 @@ mha_fwd_ffi_impl(
 
     // auto opts = q.options();
     auto out_type = q_type == ffi::F8E4M3FN ? ffi::BF16 : q_type;
-    FFI_CHECK(out->dimensions().size() > 0);
+    FFI_CHECK(out.dimensions().size() > 0);
 
-    FFI_CHECK(out->element_type() == out_type) << "For FP16/BF16 input, output must have the same dtype as inputs. For FP8 input, output must have dtype BF16";
+    FFI_CHECK(out.element_type() == out_type) << "For FP16/BF16 input, output must have the same dtype as inputs. For FP8 input, output must have dtype BF16";
     if (!is_varlen_q) {
-        CHECK_SHAPE(*out, batch_size, seqlen_q, num_heads, head_size_v);
+        CHECK_SHAPE(out, batch_size, seqlen_q, num_heads, head_size_v);
     } else {
-        CHECK_SHAPE(*out, total_q, num_heads, head_size_v);
+        CHECK_SHAPE(out, total_q, num_heads, head_size_v);
     }
 
     auto round_multiple = [](int x, int m) { return (x + m - 1) / m * m; };
@@ -577,31 +570,31 @@ mha_fwd_ffi_impl(
 
     // at::Tensor softmax_lse;
     if (!is_varlen_q) {
-        CHECK_SHAPE(*softmax_lse, batch_size, num_heads, seqlen_q);
+        CHECK_SHAPE(softmax_lse, batch_size, num_heads, seqlen_q);
     } else {
-        CHECK_SHAPE(*softmax_lse, num_heads, total_q);
+        CHECK_SHAPE(softmax_lse, num_heads, total_q);
     }
 
     Flash_fwd_params params;
-    FFI_RET_CHECK(set_params_fprop_ffi(params, stream, device_ordinal,
+    set_params_fprop_ffi(params, stream, device_ordinal,
                      batch_size,
                      seqlen_q, seqlen_k,
                      seqlen_q_rounded, seqlen_k_rounded,
                      num_heads, num_heads_k,
                      head_size, head_size_rounded,
-                     q, k, v, *out,
+                     q, k, v, out,
                      !is_varlen_q ? nullptr : cu_seqlens_q.untyped_data(),
                      !is_varlen_k ? nullptr : cu_seqlens_k.untyped_data(),
                      /*seqused_q=*/ nullptr,
                      /*seqused_k=*/ nullptr,
-                     softmax_lse->untyped_data(),
+                     softmax_lse.untyped_data(),
                      /*p_dropout=*/0.f,
                      softmax_scale,
                      window_size_left,
                      window_size_right,
                      attention_chunk,
                      softcap,
-                     sm_margin));
+                     sm_margin);
     params.total_q = total_q;
     params.total_k = total_k;
     params.b_k = batch_size_k;
@@ -669,10 +662,10 @@ mha_fwd_ffi_impl(
     params.pagedkv_tma = get_pagedkv_tma(params);
     params.num_splits = num_splits <= 0 ? get_num_splits(params) : num_splits;
     // Always enable PackGQA for Split, and get_pack_gqa requires params.num_splits to decide
-    params.pack_gqa = pack_gqa_.has_value() ? pack_gqa_.value() : get_pack_gqa(params);
+    params.pack_gqa = pack_gqa_;
 
     // This needs to be set after get_num_splits
-    ffi::Buffer<ffi::S32>& tile_count_semaphore = *scheduler_metadata;  // Contains the semaphore and optionally num_splits_dynamic
+    ffi::TensorArg& tile_count_semaphore = scheduler_metadata;  // Contains the semaphore and optionally num_splits_dynamic
     // We don't use the persistent scheduler if Split and not Varlen
     bool const scheduler_needs_semaphore = params.arch == 90
         ? (((params.is_causal || params.is_local) && (params.num_splits == 1)) || is_varlen)
@@ -692,13 +685,18 @@ mha_fwd_ffi_impl(
 
         // Always compute metadata in the fwd kernel for simplicity.
         params.skip_scheduler_metadata_computation = false; //scheduler_metadata.dimensions().size() > 0;
-        FFI_CHECK(scheduler_metadata->dimensions().size() > 0) << "scheduler_metadata must be provided when scheduler_needs_semaphore or use_prepare_varlen is true";
+        FFI_CHECK(scheduler_metadata.dimensions().size() > 0) << "scheduler_metadata must be provided when scheduler_needs_semaphore or use_prepare_varlen is true";
         // if (scheduler_metadata.dimensions().size() > 0) {
-        CHECK_SHAPE(*scheduler_metadata, metadata_size);
-        FFI_CHECK(scheduler_metadata->element_type() == ffi::S32) << "scheduler_metadata must have dtype int32";
+        CHECK_SHAPE(scheduler_metadata, metadata_size);
+        FFI_CHECK(scheduler_metadata.element_type() == ffi::S32) << "scheduler_metadata must have dtype int32";
         // }
         // if (scheduler_needs_semaphore && !use_prepare_varlen) {
         // manually zero it
+        if (flash_debug()) {
+            fprintf(stderr, "[flash_attn_jax] FA3 memset: ptr=%p size=%zu stream=%p metadata_dims=%zu\n",
+                    tile_count_semaphore.untyped_data(), tile_count_semaphore.size_bytes(),
+                    (void*)stream, tile_count_semaphore.dimensions().size());
+        }
         FFI_CUDA_CHECK(cudaMemsetAsync(
             tile_count_semaphore.untyped_data(),
             0,
@@ -782,24 +780,24 @@ mha_fwd_ffi_impl(
     auto outaccum_type = ffi::S32;
     if (params.num_splits > 1) {
         FFI_CHECK(params.num_splits <= 256) << "num_splits > 256 not supported";
-        auto out_accum_strides = get_strides(*out_accum);
-        auto softmax_lse_accum_strides = get_strides(*softmax_lse_accum);
+        auto out_accum_strides = get_strides(out_accum);
+        auto softmax_lse_accum_strides = get_strides(softmax_lse_accum);
         if (!is_varlen_q) {
-            CHECK_SHAPE(*out_accum, params.num_splits, batch_size, num_heads, seqlen_q, head_size_v);
-            CHECK_SHAPE(*softmax_lse_accum, params.num_splits, batch_size, num_heads, seqlen_q);
+            CHECK_SHAPE(out_accum, params.num_splits, batch_size, num_heads, seqlen_q, head_size_v);
+            CHECK_SHAPE(softmax_lse_accum, params.num_splits, batch_size, num_heads, seqlen_q);
             // out_accum = torch::empty({params.num_splits, batch_size, num_heads, seqlen_q, head_size_v}, opts.dtype(outaccum_type));
             // softmax_lse_accum = torch::empty({params.num_splits, batch_size, num_heads, seqlen_q}, opts.dtype(at::kFloat));
             params.oaccum_batch_stride = out_accum_strides[1];
             params.lseaccum_batch_stride = softmax_lse_accum_strides[1];
         } else {
-            CHECK_SHAPE(*out_accum, params.num_splits, num_heads, total_q, head_size_v);
-            CHECK_SHAPE(*softmax_lse_accum, params.num_splits, num_heads, total_q);
+            CHECK_SHAPE(out_accum, params.num_splits, num_heads, total_q, head_size_v);
+            CHECK_SHAPE(softmax_lse_accum, params.num_splits, num_heads, total_q);
             // out_accum = torch::empty({params.num_splits, num_heads, total_q, head_size_v}, opts.dtype(outaccum_type));
             // softmax_lse_accum = torch::empty({params.num_splits, num_heads, total_q}, opts.dtype(at::kFloat));
         }
         params.is_fp32 = false;
-        params.oaccum_ptr = out_accum->untyped_data();
-        params.softmax_lseaccum_ptr = softmax_lse_accum->untyped_data();
+        params.oaccum_ptr = out_accum.untyped_data();
+        params.softmax_lseaccum_ptr = softmax_lse_accum.untyped_data();
         params.oaccum_split_stride = out_accum_strides[0];
         params.oaccum_row_stride = out_accum_strides[out_accum_strides.size()-2];
         params.oaccum_head_stride = out_accum_strides[out_accum_strides.size()-3];
@@ -811,7 +809,7 @@ mha_fwd_ffi_impl(
         if (q_descale.dimensions().size() > 0) {
             CHECK_SHAPE(q_descale, batch_size, num_heads_k);
             auto q_descale_strides = get_strides(q_descale);
-            params.q_descale_ptr = q_descale.typed_data();
+            params.q_descale_ptr = static_cast<float*>(q_descale.untyped_data());
             params.q_descale_batch_stride = q_descale_strides[0];
             params.q_descale_head_stride = q_descale_strides[1];
         } else {
@@ -820,7 +818,7 @@ mha_fwd_ffi_impl(
         if (k_descale.dimensions().size() > 0) {
             CHECK_SHAPE(k_descale, batch_size, num_heads_k);
             auto k_descale_strides = get_strides(k_descale);
-            params.k_descale_ptr = k_descale.typed_data();
+            params.k_descale_ptr = static_cast<float*>(k_descale.untyped_data());
             params.k_descale_batch_stride = k_descale_strides[0];
             params.k_descale_head_stride = k_descale_strides[1];
         } else {
@@ -829,7 +827,7 @@ mha_fwd_ffi_impl(
         if (v_descale.dimensions().size() > 0) {
             CHECK_SHAPE(v_descale, batch_size, num_heads_k);
             auto v_descale_strides = get_strides(v_descale);
-            params.v_descale_ptr = v_descale.typed_data();
+            params.v_descale_ptr = static_cast<float*>(v_descale.untyped_data());
             params.v_descale_batch_stride = v_descale_strides[0];
             params.v_descale_head_stride = v_descale_strides[1];
         } else {
@@ -853,8 +851,22 @@ mha_fwd_ffi_impl(
     FFI_CHECK(!(params.page_table && !params.pagedkv_tma)) << "This flash attention build does not support paged KV.";
     #endif
     #ifdef FLASHATTENTION_DISABLE_APPENDKV
-    FFI_CHECK(!(k_new_.dimensions().size() > 0)) << "This flash attention build does not support appending KV.";
+    FFI_CHECK(!(k_new.dimensions().size() > 0)) << "This flash attention build does not support appending KV.";
     #endif
+
+    if (flash_debug()) {
+        fprintf(stderr, "[flash_attn_jax] FA3 mha_fwd: b=%d seqlen_q=%d seqlen_k=%d h=%d h_k=%d "
+                "d=%d dv=%d d_rounded=%d dv_rounded=%d is_causal=%d is_local=%d "
+                "num_splits=%d pack_gqa=%d is_varlen=%d pagedkv_tma=%d "
+                "window_size_left=%d window_size_right=%d softcap=%f num_sm=%d "
+                "total_q=%d total_k=%d\n",
+                params.b, params.seqlen_q, params.seqlen_k, params.h, params.h_k,
+                params.d, params.dv, params.d_rounded, params.dv_rounded,
+                params.is_causal, params.is_local,
+                params.num_splits, params.pack_gqa, is_varlen, params.pagedkv_tma,
+                params.window_size_left, params.window_size_right, params.softcap, params.num_sm,
+                total_q, total_k);
+    }
 
     if (total_q > 0 && (total_k + params.total_knew) > 0 && num_heads_k > 0) {
         run_mha_fwd(params, stream);
@@ -878,10 +890,7 @@ mha_fwd_ffi_impl(
     } else if (total_q > 0 && num_heads_k > 0) {
         // If seqlen_k == 0, then we have an empty tensor. We need to set the output to 0.
         // This may seem cursed, but that's because it is. 0xFEFEFEFE is approximately -1.69e+38, which is close enough to -inf.
-        FFI_CUDA_CHECK(cudaMemsetAsync(out->untyped_data(), 0, out->size_bytes(), stream));
-        FFI_CUDA_CHECK(cudaMemsetAsync(softmax_lse->untyped_data(), 0xFE, softmax_lse->size_bytes(), stream));
+        FFI_CUDA_CHECK(cudaMemsetAsync(out.untyped_data(), 0, out.size_bytes(), stream));
+        FFI_CUDA_CHECK(cudaMemsetAsync(softmax_lse.untyped_data(), 0xFE, softmax_lse.size_bytes(), stream));
     }
-
-    // return {out, softmax_lse};
-    return ffi::Error();
 }

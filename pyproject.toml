@@ -4,7 +4,7 @@ requires = [
     "setuptools-scm>=8.0",
     "packaging",
     "psutil",
-    "nanobind>=2.0.0",
+    "apache-tvm-ffi>=0.1.12",
 ]
 build-backend = "scikit_build_core.build"
 
@@ -20,8 +20,10 @@ authors = [
     { name = "Emily Shepperd", email = "em@zlkj.in" }
 ]
 dependencies = [
-    "nanobind>=2.0.0",
-    "jax>=0.5.0, <0.11.0"
+    "jax>=0.5.0, <0.11.0",
+    "einops",
+    "apache-tvm-ffi>=0.1.12",
+    "jax-tvm-ffi>=0.1.2",
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -51,6 +53,9 @@ Homepage = "https://github.com/nshepperd/flash_attn_jax"
 
 [tool.scikit-build]
 wheel.expand-macos-universal-tags = false
+# The kernel libraries are tvm-ffi shared libraries (stable C ABI, no CPython
+# dependency), so one wheel covers all Python versions: py3-none-<plat>.
+wheel.py-api = "py3"
 cmake.version = ">=3.26.1"
 ninja.version = ">=1.11"
 build.verbose = true
@@ -81,10 +86,17 @@ CMAKE_VERBOSE_MAKEFILE = "ON"
 
 [tool.cibuildwheel]
 archs = ["x86_64"]
+# The wheel is py3-none (Python-ABI-independent), so build it under a single
+# Python version — every interpreter would produce an identical wheel.
+build = "cp312-manylinux_x86_64"
 # manylinux-x86_64-image = "pytorch/manylinux2_28-builder:cuda12.8"
 # before-all = "bash scripts/install-cuda-linux.sh"
-# build = "cp{311,312,313}-manylinux_x86_64"
-repair-wheel-command = "auditwheel repair --exclude=libcudart.so* --exclude=libcuda.so* -w {dest_dir} {wheel}"
+
+# Binary deps:
+# nvidia-cuda-runtime: libcudart.so
+# nvidia driver (stub): libcuda.so
+# apache-tvm-ffi: libtvm_ffi.so
+repair-wheel-command = "auditwheel repair --exclude=libcudart.so* --exclude=libcuda.so* --exclude=libtvm_ffi.so* -w {dest_dir} {wheel}"
 
 # [tool.cibuildwheel.environment]
 # PATH="/opt/rh/gcc-toolset-13/root/usr/bin:/usr/local/cuda/bin:$PATH"

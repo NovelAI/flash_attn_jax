@@ -132,7 +132,7 @@ def _flash_mha_varlen_fwd_hlo_lowering_fa2(
         "flash_mha_varlen_fwd",
         result_shape_dtypes=out_types,
         has_side_effect=False,
-        input_layouts=[None] * 5,  # default row major
+        input_layouts=[None] * 6,  # default row major
         output_layouts=[None] * 4,
     )(
         q,
@@ -140,13 +140,14 @@ def _flash_mha_varlen_fwd_hlo_lowering_fa2(
         v,
         seqlens_q,
         seqlens_k,
-        max_seqlen_q=mlir.i32_attr(max_seqlen_q),
-        max_seqlen_k=mlir.i32_attr(max_seqlen_k),
-        softmax_scale=softmax_scale,
+        jnp.zeros((), dtype=jnp.int32),  # seqused_k (absent)
+        max_seqlen_q=np.int64(max_seqlen_q),
+        max_seqlen_k=np.int64(max_seqlen_k),
+        softmax_scale=np.float64(softmax_scale),
         zero_tensors=False,
         is_causal=is_causal,
-        window_size_left=window_size_left,
-        window_size_right=window_size_right,
+        window_size_left=np.int64(window_size_left),
+        window_size_right=np.int64(window_size_right),
     )[:2]
 
     if dpad > 0:
